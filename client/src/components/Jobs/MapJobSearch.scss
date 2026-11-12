@@ -1,0 +1,12 @@
+// Same width as the job cards (37.5rem + 23.25rem) and the header filters.
+.map-job-search {
+  max-width: 60.75rem;
+}
+
+// One column (below lg): keep the square map from filling a tablet screen.
+@media (max-width: 991.98px) {
+  .map-job-search__map {
+    max-width: 32rem;
+    margin-inline: auto;
+  }
+}

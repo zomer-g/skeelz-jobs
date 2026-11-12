@@ -1,0 +1,61 @@
+{
+  "name": "skeelz-jobs-server",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "migrate": "node dist/scripts/migrate.js",
+    "import:live": "node dist/scripts/importFromLive.js",
+    "test": "node --import tsx --test test/*.test.mjs test/*.test.ts test/unit/*.test.ts",
+    "test:unit": "node --import tsx --test test/*.test.ts test/unit/*.test.ts",
+    "db:local": "pglite-server --db=.pglite --port=5437 --max-connections=10"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "axios": "1.21.1",
+    "bcryptjs": "^2.4.3",
+    "class-transformer": "0.5.1",
+    "class-validator": "0.14.1",
+    "compression": "^1.7.4",
+    "cookie-parser": "1.4.7",
+    "cors": "2.8.5",
+    "dotenv": "16.4.5",
+    "express": "4.22.3",
+    "express-rate-limit": "^7.4.0",
+    "file-type": "22.3.0",
+    "jsonwebtoken": "^9.0.2",
+    "moment-timezone": "^0.5.47",
+    "multer": "^1.4.5-lts.1",
+    "pdf-lib": "^1.17.1",
+    "pg": "^8.13.0",
+    "reflect-metadata": "^0.2.2",
+    "sanitize-html": "^2.13.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-socket": "^0.2.11",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/compression": "^1.7.5",
+    "@types/cookie-parser": "1.4.7",
+    "@types/cors": "2.8.17",
+    "@types/express": "4.17.21",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/multer": "^1.4.12",
+    "@types/node": "20.12.12",
+    "@types/pg": "^8.11.10",
+    "@types/sanitize-html": "^2.13.0",
+    "tsx": "^4.19.3",
+    "typescript": "5.4.5"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

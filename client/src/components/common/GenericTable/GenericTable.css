@@ -1,0 +1,149 @@
+/* overflow text */
+  .truncate {
+    display: inline-block;
+    max-width: 25ch;    
+    white-space: nowrap;  
+    overflow: hidden;     
+    text-overflow: ellipsis;
+  }
+
+  .rowStyle{
+    border-bottom: 1px solid #eee;
+  }
+  
+  .table-container {
+    width: 100%;
+    overflow-x: auto;
+    direction: rtl;
+  }
+  
+  .responsive-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 16px;
+    font-family: 'Rubik', sans-serif;
+  }
+  
+  .responsive-table th,
+  .responsive-table td {
+    padding: 8px;
+    text-align: right;
+    white-space: nowrap;
+    transition: background-color 0.2s ease;
+  }
+  
+  .responsive-table th {
+    background-color: #EFEFEF;
+    height: 56px;
+    font-size: 14px;
+  }
+  
+
+  .responsive-table tbody tr:hover {
+    background-color: #ffe6f0;
+  }
+
+  .table-row-selected {
+    background-color: #fce4f6 !important;
+  }
+  
+
+  .status-tag {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 14px;
+  }
+  
+  .status-open {
+    background-color: #ECFDF3;
+    color: #027A48;
+  }
+  
+  .status-paused {
+    background-color: #FEF0C7;
+    color: #DC6803;
+  }
+  
+  .status-closed {
+    background-color: #FEF3F2;
+    color: #D92D20;
+  }
+
+  .sticky-left {
+    position: sticky;
+    left: 0;
+    background: white;
+    z-index: 1;
+  }
+  
+  .sticky-right {
+    position: sticky;
+    right: 0;
+    background: white;
+    z-index: 1;
+  }
+  
+
+  @media (max-width: 768px) {
+    .responsive-table thead {
+      display: none;
+    }
+  
+    .responsive-table tr {
+      display: block;
+      margin-bottom: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 8px;
+      position: relative;
+    }
+  
+    .responsive-table td {
+      text-align: right;
+      padding-left: 10px !important;
+      display: flex;
+      padding: 0px;
+      border: none;
+    }
+
+    .responsive-table td.mobile-align-left {
+      justify-content: flex-end; /* RTL אז זה שמאלה */
+      text-align: left;
+      position: absolute;
+      bottom: 10px;
+      left: 8px;
+    }
+  
+    .responsive-table td::before {
+      content: attr(data-label);
+      font-weight: bold;
+      color: #333;
+      white-space: pre;
+    }
+  
+    .responsive-table td:last-child {
+      border-bottom: none;
+    }
+  }
+  
+  .pagination-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+  
+  .min-w-20vh {
+    min-width: 20vh;
+  }
+  
+  .sortable {
+    cursor: pointer;
+  }
+  
+  
+
+
+

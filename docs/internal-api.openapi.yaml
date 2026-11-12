@@ -1,0 +1,289 @@
+# INTERNAL — not public. The internal API of SKEELZ Jobs, for SKEELZ's own systems (server to server).
+# Not served by the app and not linked from any page. Code: server/src/internalApi/. Security: docs/security.md.
+openapi: 3.0.3
+info:
+  title: SKEELZ Jobs — internal API
+  version: 1.0.0
+  description: |
+    Server-to-server API for SKEELZ's own integrations. Separate from the public read-only API.
+
+    **Auth** — `Authorization: Bearer <token>`, one of:
+    - a temporary token issued by a staff member (content manager on `/jobs-management`, admin on `/security-management`;
+      the people scopes `candidates:read`, `applications:read`, `cvs:read` only by a content manager): a name, scopes and an
+      expiry (default 30 days, at most 90). Shown once; stored only as a SHA-256 hash with a visible prefix
+      (`skzi_xxxxxxxx`). Can be revoked (effective on the next request). In the activity log it is `token:<prefix>`.
+    - the server secret `INTERNAL_API_SECRET` (xhostd secret, ≥ 32 characters; unset = off). Every scope.
+      In the activity log it is `system:internal-api`.
+
+    Cookies and the site's user sessions are not accepted here. Browsers on another site are refused
+    (`Sec-Fetch-Site: cross-site|same-site` → 403 `cross_site`).
+
+    **Errors** — 401 `no_token` / `invalid_token` / `token_expired` / `token_revoked`; 403 `insufficient_scope`;
+    429 `limit_people` / `limit_cvs` (daily limit; an admin was alerted and can grant more) or `rl1` (300 requests a
+    minute per IP); 503 `audit_unavailable` (the activity log could not be written, so nothing was handed over);
+    409 `salesforce_disabled`. Every refusal is written to the activity log.
+
+    **People data** — candidates, applications and CVs go through the same hand-over as for admins: each caller
+    (token or secret) has its own daily limit (1,500 candidates shown, each counted once a day; 40 CVs), with alerts
+    at half, and a strict log entry with the ids shown is written before the data is sent. Rows past the limit are
+    cut (`cut` in the answer); when nothing new fits, 429.
+servers:
+  - url: https://jobs.skeelz.co.il/api/internal/v1
+  - url: http://localhost:3100/api/internal/v1
+security:
+  - bearer: []
+tags:
+  - name: jobs
+  - name: candidates
+  - name: applications
+  - name: salesforce
+paths:
+  /jobs:
+    get:
+      tags: [jobs]
+      summary: Jobs of every status, with internal comments (scope jobs:read)
+      parameters:
+        - { name: status, in: query, schema: { type: string, example: 'Active,Suspended' }, description: 'Comma-separated: Active, Suspended, Closed' }
+        - $ref: '#/components/parameters/page'
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 50 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: {
+          jobs: { type: array, items: { $ref: '#/components/schemas/Job' } }, total: { type: integer }, page: { type: integer }, limit: { type: integer } } } } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [jobs]
+      summary: Create a job (scope jobs:write)
+      description: Same validation as the admin screen (unknown fields are refused; HTML is sanitised). Logged as job.created.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/JobInput' } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { type: object, properties: { data: { $ref: '#/components/schemas/Job' } } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+  /jobs/{id}:
+    parameters: [ { $ref: '#/components/parameters/id' } ]
+    get:
+      tags: [jobs]
+      summary: One job (scope jobs:read)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: '#/components/schemas/Job' } } } } } }
+        '404': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [jobs]
+      summary: Update a job (scope jobs:write) — any subset of JobInput. Logged as job.updated (field names).
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/JobInput' } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: '#/components/schemas/Job' } } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /candidates:
+    get:
+      tags: [candidates]
+      summary: Candidates, most recently changed first (scope candidates:read; counted, logged as candidates.shown)
+      parameters:
+        - { name: search, in: query, schema: { type: string, maxLength: 100 }, description: 'Name, email or phone (contains)' }
+        - { name: hasCv, in: query, schema: { type: boolean } }
+        - { name: updatedSince, in: query, schema: { type: string, format: date-time } }
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: {
+          candidates: { type: array, items: { $ref: '#/components/schemas/Candidate' } }, total: { type: integer },
+          cut: { type: integer, description: 'Rows withheld by the daily limit' }, page: { type: integer }, limit: { type: integer } } } } } } } }
+        '429': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+  /candidates/{id}:
+    parameters: [ { $ref: '#/components/parameters/id' } ]
+    get:
+      tags: [candidates]
+      summary: One candidate (scope candidates:read; counted, logged)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: '#/components/schemas/Candidate' } } } } } }
+        '404': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /candidates/{id}/cv:
+    parameters: [ { $ref: '#/components/parameters/id' } ]
+    get:
+      tags: [candidates]
+      summary: The candidate's profile CV file (scopes candidates:read + cvs:read; CV limit, logged as candidate.cv_opened)
+      responses:
+        '200': { $ref: '#/components/responses/File' }
+        '404': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /applications:
+    get:
+      tags: [applications]
+      summary: Applications, newest first (scope applications:read; counted, logged as candidate.applications_viewed)
+      parameters:
+        - { name: jobId, in: query, schema: { type: string, pattern: '^[0-9a-f]{24}$' } }
+        - { name: candidateId, in: query, schema: { type: string, pattern: '^[0-9a-f]{24}$' } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/limit'
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: {
+          applications: { type: array, items: { $ref: '#/components/schemas/Application' } }, total: { type: integer }, cut: { type: integer },
+          page: { type: integer }, limit: { type: integer } } } } } } } }
+        '429': { $ref: '#/components/responses/Error' }
+  /applications/{id}:
+    parameters: [ { $ref: '#/components/parameters/id' } ]
+    get:
+      tags: [applications]
+      summary: One application (scope applications:read; counted, logged)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: '#/components/schemas/Application' } } } } } }
+        '404': { $ref: '#/components/responses/Error' }
+  /applications/{id}/cv:
+    parameters: [ { $ref: '#/components/parameters/id' } ]
+    get:
+      tags: [applications]
+      summary: The CV sent with this application (scopes applications:read + cvs:read; CV limit, logged)
+      responses:
+        '200': { $ref: '#/components/responses/File' }
+        '404': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /salesforce/sync:
+    get:
+      tags: [salesforce]
+      summary: Sync state per record and pending counts (scope salesforce:push). Works while Salesforce is off.
+      parameters:
+        - { name: kind, in: query, schema: { $ref: '#/components/schemas/SyncKind' } }
+        - { name: status, in: query, schema: { type: string, enum: [error, synced] } }
+        - $ref: '#/components/parameters/page'
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 50 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: {
+          enabled: { type: boolean }, pending: { type: object, additionalProperties: { type: integer } },
+          records: { type: array, items: { $ref: '#/components/schemas/SyncRecord' } } } } } } } } }
+  /salesforce/jobs/{id}/push:
+    parameters: [ { $ref: '#/components/parameters/id' } ]
+    post: { tags: [salesforce], summary: Push one job Case (scope salesforce:push), responses: { $ref: '#/components/x-push-responses' } }
+  /salesforce/candidates/{id}/push:
+    parameters: [ { $ref: '#/components/parameters/id' } ]
+    post: { tags: [salesforce], summary: Push one candidate Contact (scope salesforce:push), responses: { $ref: '#/components/x-push-responses' } }
+  /salesforce/applications/{id}/push:
+    parameters: [ { $ref: '#/components/parameters/id' } ]
+    post:
+      tags: [salesforce]
+      summary: Push one application Case (scope salesforce:push); pushes the candidate first if needed, attaches the application's CV when the Case is created
+      responses: { $ref: '#/components/x-push-responses' }
+  /salesforce/push-pending:
+    post:
+      tags: [salesforce]
+      summary: Push everything pending — never pushed, or changed since (scope salesforce:push)
+      description: Order jobs → candidates → applications; stops if Salesforce refuses the login.
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: {
+          kinds: { type: array, items: { $ref: '#/components/schemas/SyncKind' } },
+          limit: { type: integer, minimum: 1, maximum: 200, default: 50 } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { data: { type: object, properties: {
+          pushed: { type: integer }, failed: { type: integer }, results: { type: array, items: { $ref: '#/components/schemas/PushResult' } } } } } } } } }
+        '409': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer, description: 'An internal API token (skzi_…) or INTERNAL_API_SECRET' }
+  parameters:
+    id: { name: id, in: path, required: true, schema: { type: string, pattern: '^[0-9a-f]{24}$' } }
+    page: { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+    limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { type: object, properties: { message: { type: string }, code: { type: string } } } } }
+    File:
+      description: The file (attachment; PDF or DOCX)
+      content: { application/octet-stream: { schema: { type: string, format: binary } } }
+  x-push-responses:
+    '200': { description: Pushed, content: { application/json: { schema: { type: object, properties: { data: { $ref: '#/components/schemas/PushResult' } } } } } }
+    '404': { description: No such record }
+    '409': { description: 'Salesforce is off (ENABLE_SALESFORCE): nothing was sent. code salesforce_disabled' }
+    '502': { description: 'Salesforce refused; data.error has the code (also stored in the sync state)' }
+  schemas:
+    SyncKind: { type: string, enum: [job, candidate, application] }
+    PushResult:
+      type: object
+      properties:
+        kind: { $ref: '#/components/schemas/SyncKind' }
+        id: { type: string }
+        ok: { type: boolean }
+        sfId: { type: string }
+        created: { type: boolean }
+        error: { type: string, example: http_400_REQUIRED_FIELD_MISSING, description: 'A code, never a Salesforce response body' }
+        note: { type: string, example: 'cv_not_attached:http_500' }
+    SyncRecord:
+      type: object
+      properties:
+        kind: { $ref: '#/components/schemas/SyncKind' }
+        recordId: { type: string }
+        sfId: { type: string, nullable: true }
+        lastPushedAt: { type: string, format: date-time, nullable: true }
+        lastAttemptAt: { type: string, format: date-time }
+        lastErrorCode: { type: string, nullable: true }
+        attempts: { type: integer }
+    JobInput:
+      type: object
+      required: [title, jobScope, companyName, publishDate, citySymbol, description, uploadBy, status]
+      properties:
+        title: { type: string }
+        jobScope: { type: array, items: { type: string, example: FullTime } }
+        companyName: { type: string }
+        publishDate: { type: string, format: date-time }
+        citySymbol: { type: integer, description: CBS settlement code }
+        description: { type: string, description: HTML (sanitised) }
+        contactPersonName: { type: string }
+        contactPersonPhone: { type: string }
+        contactPersonEmail: { type: string, format: email }
+        externalLink: { type: string }
+        uploadBy: { type: string }
+        status: { type: string, enum: [Active, Suspended, Closed] }
+        comments: { type: string, description: Internal (never on the public pages) }
+        requiredSkills: { type: array, items: { type: string } }
+        isSponsored: { type: boolean }
+        isMarked: { type: boolean }
+        isSelfApply: { type: boolean }
+    Job:
+      allOf:
+        - $ref: '#/components/schemas/JobInput'
+        - type: object
+          properties:
+            _id: { type: string }
+            jobId: { type: integer, description: Public job number }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+    Candidate:
+      type: object
+      properties:
+        id: { type: string }
+        firstName: { type: string }
+        lastName: { type: string }
+        email: { type: string }
+        phoneNumber: { type: string }
+        dateOfBirth: { type: string, format: date-time, nullable: true }
+        gender: { type: string }
+        citySymbol: { type: integer }
+        city: { type: string, nullable: true }
+        skills: { type: array, items: { type: string } }
+        hasCv: { type: boolean }
+        hasAppliedToJob: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        cvLink: { type: string, nullable: true, example: /api/internal/v1/candidates/0123456789abcdef01234567/cv }
+    Application:
+      type: object
+      properties:
+        id: { type: string }
+        jobId: { type: string }
+        jobNumber: { type: integer, nullable: true }
+        jobTitle: { type: string, nullable: true }
+        candidateId: { type: string }
+        createdAt: { type: string, format: date-time }
+        cvScope: { type: string, enum: ['', profile, job] }
+        hasCv: { type: boolean }
+        cvLink: { type: string, nullable: true, example: /api/internal/v1/applications/0123456789abcdef01234567/cv }

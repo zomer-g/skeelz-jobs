@@ -1,0 +1,480 @@
+@font-face {
+  font-family: 'EzerLoftLightFont';
+  src: url('/fonts/EzerLoft-Light.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'EzerLoftThinFont';
+  src: url('/fonts/EzerLoft-Thin.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'EzerLoftRegularFont';
+  src: url('/fonts/EzerLoft-Regular.otf') format('truetype');
+}
+
+@font-face {
+  font-family: 'RubikMediumFont';
+  src: url('/fonts/Rubik-Medium.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'RubikLightFont';
+  src: url('/fonts/Rubik-Light.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'RubikRegularFont';
+  src: url('/fonts/Rubik-Regular.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'RubikBoldFont';
+  src: url('/fonts/Rubik-Bold.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'OpenSansRegularFont';
+  src: url('/fonts/OpenSans-Regular.ttf') format('truetype');
+}
+
+:root {
+  --success: #039855;
+  --error: #FF0400;
+  --green-mint: #D1FADF;
+  --green-sage: #ECFDF3;
+  --grey-1: #EDEDED;
+  --grey-2: #98A2B3;
+  --grey-3: #52525B;
+  --grey-4: #667085;
+  --grey-5: #D0D5DD;
+  --blue-1: #C9FFFF;
+  --blue-2: #00DBDA;
+  --successful-b: #bff6bb;
+  --pink: #ffe6e6;
+  --orange: #ffcc9d;
+}
+
+body {
+  margin: 0;
+}
+
+.direction_he {
+  direction: rtl;
+}
+
+.direction_en,
+.ltr {
+  direction: ltr;
+}
+
+.log_info {
+  color: #00A1DE;
+}
+
+.log_warning {
+  color: #e7b800;
+}
+
+.log_error {
+  color: #FF3333;
+}
+
+.shadowBox {
+  box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.2), 0 6px 20px 0 rgba(0, 0, 0, 0.19);
+  padding: 19px;
+}
+
+.mw-200px {
+  max-width: 200px;
+}
+
+
+/***********************************/
+.text-pre-wrap {
+  white-space: pre-wrap !important;
+}
+
+/***********************************/
+
+.logo {
+  width: 64px;
+  height: 35px;
+}
+
+@media (min-width: 768px) {
+  .logo {
+    width: 91px;
+    height: 50px;
+  }
+}
+
+
+/****************************************************************/
+/***custom styles for the toast component*/
+
+.custom-toast-rtl .MuiAlert-action {
+  margin-right: auto;
+  margin-left: -8px;
+}
+
+.custom-toast-rtl .MuiAlert-icon {
+  margin-right: 0px;
+  margin-left: 12px;
+}
+
+.toast-snackbar {
+  padding: 0 !important;
+}
+
+.toast-alert {
+  width: 27rem;
+  height: 4rem;
+  font-family: unset !important;
+  display: flex;
+  align-items: center;
+  padding: 0.5rem;
+  box-sizing: border-box;
+  box-shadow: 2px 2px 6.1px 0px #00000040 !important;
+}
+
+.toast-alert .MuiAlert-message {
+  font-size: 1rem;
+  font-weight: 500;
+  padding: 16px 6px 16px 6px;
+}
+
+/****************************************************************/
+
+.filters-panel-width {
+  /* mobile */
+  width: 100% !important;
+}
+
+
+@media (min-width: 990px) {
+
+  /* Desktop and tablet */
+  .filters-panel-width {
+    width: 31.75rem !important;
+    /* width: 100% !important; */
+  }
+}
+
+/***********************************/
+/*border-radius*/
+
+.border-radius-30 {
+  border-radius: 30px;
+}
+
+
+/***********************************/
+.custom-autocomplete-dimensions {
+  /* mobile */
+  height: 2.187rem !important;
+  /* width: 8.125rem !important; */
+}
+
+@media (min-width: 768px) {
+
+  /* Desktop and tablet */
+  .custom-autocomplete-dimensions {
+    height: 3rem !important;
+    /* width: 10rem !important; */
+  }
+}
+
+/***********************************/
+.custom-dropdown-sizes {
+  /* mobile */
+  height: 2.187rem !important;
+  /* min-width: 8.125rem !important; */
+}
+
+@media (min-width: 768px) {
+
+  /* Desktop and tablet */
+  .custom-dropdown-sizes {
+    height: 3rem !important;
+    font-size: 1.125rem !important;
+    /* width: 10rem !important; */
+  }
+}
+
+/***********************************/
+
+/* colors */
+.color-success {
+  color: var(--success)
+}
+
+.color-error {
+  color: var(--error)
+}
+
+.color-attention {
+  color: var(--error)
+}
+
+.color-grey-3 {
+  color: var(--grey-3) !important
+}
+
+.color-grey-4 {
+  color: var(--grey-4) !important
+}
+
+/***********************************/
+.outline-none {
+  outline: none;
+}
+
+
+/***********************************/
+/* background colors */
+
+.background-none {
+  background: none !important;
+}
+
+.background-color-green-mint {
+  background-color: var(--green-mint) !important;
+}
+
+.background-color-grey-1 {
+  background-color: var(--grey-1) !important;
+}
+
+.background-color-blue-1 {
+  background-color: var(--blue-1) !important;
+}
+
+.background-successful-b {
+  background-color: var(--successful-b) !important
+}
+
+.background-pink {
+  background-color: var(--pink) !important
+}
+
+.background-color-orange {
+  background-color: var(--orange) !important
+}
+
+/***********************************/
+/* border colors */
+.border-color-green-sage {
+  border-color: var(--green-sage) !important;
+}
+
+.border-color-grey-2 {
+  border-color: var(--grey-2) !important;
+}
+
+.border-color-grey-5 {
+  border-color: var(--grey-5) !important
+}
+
+.border-color-blue-2 {
+  border-color: var(--blue-2) !important;
+}
+
+/*********************************/
+.border-width-0-5-rem {
+  border-width: 0.5rem !important;
+}
+
+/*********************************/
+/*sizes*/
+.size-3-375rem {
+  width: 3.375rem !important;
+  height: 3.375rem !important;
+}
+
+
+/****************************************************************/
+
+.custom-header-height {
+  height: 10.875rem !important;
+}
+
+.custom-header-height .title-logo-section-height {
+  padding-bottom: 1rem !important;
+  padding-top: 2rem !important;
+}
+
+@media (max-width: 767.98px) {
+  .custom-header-height {
+    height: 15rem !important;
+  }
+
+  .custom-header-height .title-logo-section-height {
+    height: 8rem !important;
+    padding-bottom: 1rem !important;
+    padding-top: 0 !important;
+  }
+
+  .custom-header-height .title {
+    display: flex;
+    align-items: end;
+    height: 100%;
+  }
+}
+
+/****************************************************************/
+.max-width-20rem {
+  max-width: 20rem;
+}
+
+.max-width-25rem {
+  max-width: 25rem;
+}
+
+.max-width-37-5rem {
+  max-width: 37.5rem !important;
+}
+
+.max-width-72-06rem {
+  max-width: 72.06rem !important;
+}
+
+.max-width-72-125rem {
+  max-width: 72.125rem !important;
+}
+
+/****************************************************************/
+/*width*/
+.width-9-375rem {
+  width: 9.375rem;
+}
+
+
+/****************************************************************/
+/*height*/
+.height-2-375rem {
+  height: 2.375rem !important;
+}
+
+.height-5-625rem {
+  height: 5.625rem !important;
+}
+
+.height-8-25rem {
+  height: 8.25rem !important;
+}
+
+.height-16-375rem {
+  height: 16.375rem !important;
+}
+
+.height-20-18rem {
+  height: 20.18rem !important;
+}
+
+.height-28-437rem {
+  height: 28.437rem !important;
+}
+
+.height-26rem {
+  height: 26rem !important;
+}
+
+.height-30rem {
+  height: 30rem !important;
+}
+
+.height-40-56rem {
+  height: 40.56rem !important;
+}
+
+/****************************************************************/
+/**** rich editor output design *****/
+
+.text-editor-output-container p {
+  margin: 0;
+}
+
+.text-editor-output-container ul {
+  list-style: none;
+  padding-right: 20px;
+}
+
+.text-editor-output-container ul li {
+  position: relative;
+  padding-right: 1.2em;
+}
+
+.text-editor-output-container ul li::before {
+  content: '•';
+  position: absolute;
+  right: 0;
+  top: -13px;
+  font-size: 32px;
+  color: black;
+}
+
+.text-editor-output-container h3 {
+  font-family: 'RubikBoldFont' !important;
+  font-size: 1.25rem !important;
+}
+
+/****************************************************************/
+
+/*paddings*/
+.p-bottom-0-156rem {
+  padding-bottom: 0.156rem !important;
+}
+
+.px-0-75rem {
+  padding-right: 0.75rem !important;
+  padding-left: 0.75rem !important;
+}
+
+.px-4rem {
+  padding-right: 4rem !important;
+  padding-left: 4rem !important;
+}
+
+/****************************************************************/
+/*custom font weights*/
+
+.fw-500 {
+  font-weight: 500 !important;
+}
+
+/****************************************************************/
+.form-select-rtl {
+  background-position: left .75rem center !important;
+  padding: .375rem .75rem .375rem 2.25rem !important;
+}
+
+/****************************************************************/
+.left-3rem {
+  left: 3rem
+}
+
+.right-3rem {
+  right: 3rem
+}
+
+.left-1-19rem {
+  left: 1.19rem
+}
+
+.right-1-19rem {
+  right: 1.19rem
+}
+
+/****************************************************************/
+/*z-index*/
+.z-index-10 {
+  z-index: 10 !important;
+}
+
+/****************************************************************/
+/*custom font size*/
+
+.fs-1-5rem {
+  font-size: 1.5rem !important;
+}
