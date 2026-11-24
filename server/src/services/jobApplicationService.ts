@@ -13,7 +13,7 @@ import * as smooveService from './smooveService.js'
 import { generateRandomId } from '../utils/utils.js';
 import { JobStatus } from '../models/enums.js';
 import { isOpenByLink } from '../models/schemas/jobBoard.js';
-import { claimCvUpload } from './s3Service.js';
+import { claimCvUpload, cvUploadClaimable } from './s3Service.js';
 import IJobApplication from '../models/schemas/jobApplication.js';
 import { checkGuestApply, checkRegularApply, DEFAULT_APPLY_POLICY } from '../models/schemas/applyPolicy.js';
 import { CvMode, parseCvChoice, resolveApplicationCv } from './applicationCv.js';
@@ -140,10 +140,14 @@ export const guestApplyJob = async (jobRef: Partial<Job> ,guestData: Guest, cons
    if (!guest.fullName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guest.email) || !guest.phoneNumber) {
      throw new AxiosError(JobsErrorMessages.APPLY_JOB, JobsErrorCodes.APPLY_JOB);
    }
-   // One quick application per address and job (before the CV upload is claimed or anything stored). The answer says
-   // only that this address already applied to this job — nothing about an account or other applications.
+   // One quick application per address and job (before the CV upload is claimed or anything stored). A repeat gets
+   // the same answer as a new one and nothing is stored, claimed, sent or mailed (security review 24.11.2026, L6:
+   // a different answer would tell anyone whether an address applied to a job).
    if (await guestAlreadyApplied(String(jobData._id), guest.email)) {
-     throw new AxiosError(JobsErrorMessages.GUEST_ALREADY_APPLIED, JobsErrorCodes.GUEST_ALREADY_APPLIED);
+     if (checkGuestApply(policy, await cvUploadClaimable(guestData?.cvFilePath)) === 'cv-required') {
+       throw new AxiosError(JobsErrorMessages.CV_REQUIRED, JobsErrorCodes.CV_REQUIRED);
+     }
+     return;
    }
    // A CV the visitor did not upload here (or one already taken) counts as no CV.
    const cvFilePath = await claimCvUpload(guestData?.cvFilePath, guest._id, { via: 'guest_application', kind: 'guest', actor: consent.actor });
@@ -164,7 +168,7 @@ export const guestApplyJob = async (jobRef: Partial<Job> ,guestData: Guest, cons
      await smooveService.ensureSmooveGuest(guestData);
     }
     await mailStaffNewApplication({ name: guest.fullName, email: guest.email, phone: guest.phoneNumber, guest: true }, jobData);
-    await mailApplicationReceived(guest.email, guest.fullName, jobData);
+    await mailApplicationReceived(guest.email, guest.fullName, jobData, { guest: true });
 
 }
 

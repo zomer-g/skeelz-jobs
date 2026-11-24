@@ -346,7 +346,12 @@ let EMP_JOB;
 await check('employer form: the job form fields come from the public list (definitions only); a required one is enforced; answers kept until approval, then on the job', async () => {
   emp.clear();
   assert.equal((await candidateLogin(emp, EMP_EMAIL)).status, 200, 'employer signs in');
-  const pub = await jar().req('GET', '/api/custom-fields/job');
+  // Security review 24.11.2026, L5: an anonymous visitor sees only the fields the job page shows; a signed-in
+  // employer sees every one (staff-only ones write-only).
+  const anon = await jar().req('GET', '/api/custom-fields/job');
+  assert.equal(anon.status, 200);
+  assert.deepEqual(anon.json.data.fields.filter((f) => [JOB_REQ, JOB_HIDDEN].includes(f.id)).map((f) => f.id), [JOB_REQ]);
+  const pub = await emp.req('GET', '/api/custom-fields/job');
   assert.equal(pub.status, 200);
   const mine = pub.json.data.fields.filter((f) => [JOB_REQ, JOB_HIDDEN].includes(f.id));
   assert.equal(mine.length, 2);
@@ -396,6 +401,20 @@ await check('edit request: only the fields shown on the job page, their answers 
   assert.deepEqual([...log.rows[0].details.fields].sort(), [`customFields.${JOB_HIDDEN}`, `customFields.${JOB_REQ}`].sort());
   const leak = await db.query(`SELECT count(*)::int AS n FROM audit_log WHERE details::text LIKE '%שכר חדש%'`);
   assert.equal(leak.rows[0].n, 0);
+});
+
+await check('edit request: a field shown when the employer asked and staff-only by approval is not written (security review 24.11.2026, L4)', async () => {
+  const req = await emp.req('POST', `/api/employer/jobs/${EMP_JOB}/edit-requests`, { customFields: { [JOB_REQ]: 'שכר שלישי' } });
+  assert.equal(req.status, 201, req.text);
+  assert.equal((await patch(JOB_REQ, { showOnJobPage: false })).status, 200);
+  try {
+    const ap = await cm.req('POST', `/api/admin/job-edit-requests/${req.json.data.id}/approve`, {});
+    assert.equal(ap.status, 200, ap.text);
+    const { rows: [j] } = await db.query(`SELECT custom_fields FROM jobs WHERE id = $1`, [EMP_JOB]);
+    assert.equal(j.custom_fields[JOB_REQ], 'שכר חדש', 'the earlier answer stays');
+  } finally {
+    assert.equal((await patch(JOB_REQ, { showOnJobPage: true })).status, 200);
+  }
 });
 
 await check('clean-up: every field this run added is turned off; the job archived', async () => {

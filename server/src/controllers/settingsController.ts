@@ -288,9 +288,11 @@ export const publicSignupCustomFields = async (_req: Request, res: Response) => 
 };
 
 /** GET /custom-fields/job — public: the job form's added fields for the employer form (/post-job, edit requests):
- *  active definitions only (label, type, options, required, hint), never an answer or a staff flag. */
-export const publicJobCustomFields = async (_req: Request, res: Response) => {
-  const defs = await customFields.definitionsOf('job');
+ *  active definitions only (label, type, options, required, hint), never an answer or a staff flag.
+ *  A staff-only field (not shown on the job page) only to a signed-in employer or staff member (security review
+ *  24.11.2026, L5): an anonymous visitor sees, and fills, only the fields the job page shows. */
+export const publicJobCustomFields = async (req: Request, res: Response) => {
+  const defs = customFields.employerFacing(await customFields.definitionsOf('job'), req.authUser);
   const onPage = new Set(defs.filter((d) => d.showOnJobPage).map((d) => d.id));
   // showOnJobPage: public by nature (the job page shows those); an employer's edit request covers only those.
   res.json({ data: { fields: formFields(defs).map((f) => ({ ...f, showOnJobPage: onPage.has(f.id) })) } });

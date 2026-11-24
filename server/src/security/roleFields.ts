@@ -15,6 +15,11 @@ import { thresholdConditionOf } from '../models/schemas/thresholdCondition.js';
 export const CONTENT_MANAGER_FIELDS: readonly string[] = ['thresholdCondition', ...OVERRIDE_FIELDS];
 
 /** The refusal sent to a coordinator (403). Field names only. */
+/** Staff never approve, nor forward candidates to, their OWN employer account (security review 24.11.2026, L3): a staff
+ *  member who also holds the employer role is an employer like any other for their own jobs. 403 with this code. */
+export const OWN_EMPLOYER_ACCOUNT = 'own_employer_account';
+export const OWN_EMPLOYER_ACCOUNT_MESSAGE = 'אי אפשר לאשר את זה לחשבון המעסיק שלך. איש צוות אחר מטפל בזה.';
+
 export const CONTENT_MANAGER_REQUIRED = 'content_manager_required';
 
 const norm = (field: string, v: unknown): string | null =>

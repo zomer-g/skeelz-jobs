@@ -186,6 +186,10 @@ await check('as employer P sees ONLY applicants forwarded to P\'s own job — no
   });
   assert.equal(sub.status, 201, sub.text);
   const item = (await cm.req('GET', '/api/admin/job-submissions')).json.data.items.find((x) => x.title === `MR-${stamp}`.slice(0, 28));
+  // Security review 24.11.2026, L3: P (content manager) never approves P's own employer account's submission.
+  const own = await pGoogle.req('POST', `/api/admin/job-submissions/${item.id}/approve`, {});
+  assert.equal(own.status, 403, own.text);
+  assert.equal(own.json.code, 'own_employer_account');
   const ap = await cm.req('POST', `/api/admin/job-submissions/${item.id}/approve`, {});
   assert.equal(ap.status, 200, ap.text);
   jobId = ap.json.data.jobId;
@@ -202,6 +206,10 @@ await check('after a forward: name + CV flag only; one employer budget owned by 
   const rows = (await cm.req('GET', '/api/admin/employer-forwards?state=pending&limit=100')).json.data.items;
   const row = rows.find((r) => r.candidateId === ids.X && r.jobId === jobId);
   assert.ok(row, 'X\'s application is forwardable to P');
+  // L3: nor forwards candidates to P's own employer account.
+  const self = await pGoogle.req('POST', '/api/admin/employer-forwards', { kind: row.kind, applicationId: row.applicationId });
+  assert.equal(self.status, 403, self.text);
+  assert.equal(self.json.code, 'own_employer_account');
   assert.equal((await cm.req('POST', '/api/admin/employer-forwards', { kind: row.kind, applicationId: row.applicationId })).status, 201);
   const g = await pGoogle.req('GET', '/api/employer/applicants');
   assert.equal(g.status, 200, g.text);

@@ -406,7 +406,7 @@ await check('guest apply does not reveal whether an email has an account', async
   assert.equal(registered.text, unknown.text);
 });
 // --- apply policy (site-wide defaults + per-job overrides) ---
-// A new address each time: one quick application per address and job (a second one is refused, 400 jb13).
+// A new address each time: one quick application per address and job (a second one is answered like a new one, nothing stored).
 let guestN = 0;
 const guestApply = (g, extra = {}) => g.req('POST', '/api/jobs/guestApply', {
   consent: true, jobData: { _id: newJobId },

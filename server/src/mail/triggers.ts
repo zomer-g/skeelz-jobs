@@ -10,11 +10,37 @@ import { safeErrorText } from '../security/pure.js';
 import { formatToIsraelTime } from '../utils/utils.js';
 import { isEnabled, sendMail, SendResult } from './mailService.js';
 import { mailKind } from './catalog.js';
+import { addressKey } from '../security/addressKey.js';
 
 const base = () => (appConfig.clientBaseUrl || '').replace(/\/+$/, '');
 export const siteUrl = () => base();
 export const jobLink = (jobId: string) => (base() ? `${base()}/job/${jobId}` : '');
 const firstWord = (name: string) => String(name || '').trim().split(/\s+/)[0] || '';
+/* Addresses nobody verified (a quick application, the anonymous employer form; security review 24.11.2026, L9): the
+ * name is the first word only, at most NAME_MAX characters, and dropped when it looks like an address or a link, so
+ * the site never mails a stranger a text someone else chose; and each such address gets at most UNVERIFIED_DAILY of
+ * these emails a day (counted in memory by a keyed hash, never the address). */
+const NAME_MAX = 30;
+const UNVERIFIED_DAILY = 5;
+export const unverifiedName = (name: string): string => {
+  const w = firstWord(String(name ?? '').slice(0, 200));
+  return !w || w.length > NAME_MAX || /[.:/\\@<>]|www/i.test(w) ? '' : w;
+};
+const unverifiedSent = new Map<string, { day: string; n: number }>();
+export const unverifiedAllowed = (to: string, now = new Date()): boolean => {
+  const day = now.toISOString().slice(0, 10);
+  const k = addressKey(String(to ?? '').trim().toLowerCase());
+  const cur = unverifiedSent.get(k);
+  if (unverifiedSent.size > 50_000) unverifiedSent.clear();
+  const n = cur && cur.day === day ? cur.n : 0;
+  if (n >= UNVERIFIED_DAILY) return false;
+  unverifiedSent.set(k, { day, n: n + 1 });
+  return true;
+};
+const sendUnverified = (kind: string, to: string, values: Record<string, unknown>, opts?: Parameters<typeof sendMail>[3]): Promise<SendResult> => {
+  if (!unverifiedAllowed(to)) { console.info(`[mail] not sent: daily limit for an unverified address kind=${kind}`); return Promise.resolve({ status: 'disabled' } as SendResult); }
+  return sendMail(kind, to, values, opts);
+};
 const safe = async (label: string, fn: () => Promise<unknown>) => {
   try { await fn(); } catch (e) { console.error(`[mail] ${label} failed`, safeErrorText(e)); }
 };
@@ -30,10 +56,10 @@ export const mailSignInCode = (to: string, code: string): Promise<SendResult> =>
 export const mailWelcome = (user: { email: string; firstName?: string }) =>
   safe('welcome', () => sendMail('welcome', user.email, { firstName: user.firstName ?? '', siteUrl: siteUrl(), profileLink: siteUrl() }));
 
-/** The candidate's own confirmation (registered or guest). */
-export const mailApplicationReceived = (to: string, name: string, job: JobLike) =>
-  safe('application_received', () => sendMail('application_received', to, {
-    firstName: firstWord(name), jobTitle: job.title ?? '', companyName: job.companyName ?? '', jobLink: jobLink(idOf(job)), siteUrl: siteUrl(),
+/** The candidate's own confirmation (registered or guest; a guest's address and name nobody verified). */
+export const mailApplicationReceived = (to: string, name: string, job: JobLike, opts: { guest?: boolean } = {}) =>
+  safe('application_received', () => (opts.guest ? sendUnverified : sendMail)('application_received', to, {
+    firstName: opts.guest ? unverifiedName(name) : firstWord(name), jobTitle: job.title ?? '', companyName: job.companyName ?? '', jobLink: jobLink(idOf(job)), siteUrl: siteUrl(),
   }));
 
 /** After "העברה למעסיק": the candidate is told, and the employer gets an invitation to their area (no candidate data). */
@@ -61,8 +87,8 @@ export const mailForwarded = (f: { kind: string; applicationId: string; candidat
 // ---- employers -----------------------------------------------------------------------------------------------------
 export const mailSubmissionDecision = (s: { contactEmail: string; contactName: string; title: string }, decision: { approved: true; jobId: string } | { approved: false; reason: string | null }) =>
   safe('submission decision', () => decision.approved
-    ? sendMail('submission_approved', s.contactEmail, { contactName: s.contactName, jobTitle: s.title, jobLink: jobLink(decision.jobId), siteUrl: siteUrl() })
-    : sendMail('submission_rejected', s.contactEmail, { contactName: s.contactName, jobTitle: s.title, reason: decision.reason ?? '', siteUrl: siteUrl() }));
+    ? sendUnverified('submission_approved', s.contactEmail, { contactName: unverifiedName(s.contactName), jobTitle: s.title, jobLink: jobLink(decision.jobId), siteUrl: siteUrl() })
+    : sendUnverified('submission_rejected', s.contactEmail, { contactName: unverifiedName(s.contactName), jobTitle: s.title, reason: decision.reason ?? '', siteUrl: siteUrl() }));
 
 export const mailEditRequestDecision = (r: { userId: string; jobId: string; jobTitle: string | null }, decision: { approved: boolean; reason?: string | null }) =>
   safe('edit request decision', async () => {
@@ -126,15 +152,15 @@ export const runJobClosedMail = async (): Promise<number> => {
       // Claimed first: a crash in the middle never mails the same job twice.
       const claimed = await query(`INSERT INTO mail_job_closed (job_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING 1`, [job.id]);
       if (!claimed.length) continue;
-      const people = await query<{ email: string; name: string }>(
-        `SELECT u.email, u.first_name AS name FROM job_applications a JOIN users u ON u.id = a.user_id AND u.deactivated_at IS NULL
+      const people = await query<{ email: string; name: string; guest: boolean }>(
+        `SELECT u.email, u.first_name AS name, false AS guest FROM job_applications a JOIN users u ON u.id = a.user_id AND u.deactivated_at IS NULL
           WHERE a.job_id = $1
          UNION
-         SELECT g.email, g.full_name AS name FROM guest_applications g WHERE g.job_id = $1
+         SELECT g.email, g.full_name AS name, true AS guest FROM guest_applications g WHERE g.job_id = $1
          LIMIT $2`, [job.id, MAX_PER_JOB]);
       let n = 0;
       for (const [i, p] of people.entries()) {
-        const r = await sendMail('job_closed', p.email, { firstName: firstWord(p.name), jobTitle: job.title, companyName: job.company_name, siteUrl: siteUrl() },
+        const r = await (p.guest ? sendUnverified : sendMail)('job_closed', p.email, { firstName: p.guest ? unverifiedName(p.name) : firstWord(p.name), jobTitle: job.title, companyName: job.company_name, siteUrl: siteUrl() },
           { idempotencyKey: `job_closed:${job.id}:${i}` });
         if (r.status === 'sent' || r.status === 'off') n++;
         await new Promise((res) => setTimeout(res, PACE_MS));

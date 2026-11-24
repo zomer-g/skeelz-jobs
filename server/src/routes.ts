@@ -93,7 +93,7 @@ router.post('/logout', tryExtractTokenPayloadMiddleware, authController.logout);
 router.get('/auth/providers', SsoController.providers);
 router.get('/auth/signup-fields', SettingsController.publicSignupFields);
 router.get('/custom-fields/signup', SettingsController.publicSignupCustomFields);
-router.get('/custom-fields/job', SettingsController.publicJobCustomFields);
+router.get('/custom-fields/job', tryExtractTokenPayloadMiddleware, SettingsController.publicJobCustomFields);
 router.get('/auth/session', tryExtractTokenPayloadMiddleware, SsoController.session);
 router.get('/auth/xhostd/start', ssoLimit, SsoController.ssoStart);
 router.get('/auth/xhostd/callback', ssoLimit, SsoController.ssoCallback);

@@ -128,6 +128,14 @@ export const claimCvUpload = async (value: string | undefined | null, ownerId: s
   return key;
 };
 
+/** Whether claimCvUpload would take this upload now, without taking it (a repeated quick application answers as a
+ *  new one would: security review 24.11.2026, L6). */
+export const cvUploadClaimable = async (value: string | undefined | null): Promise<boolean> => {
+  const key = normalizeCvKey(value);
+  if (!key) return false;
+  return (await query(`SELECT 1 FROM cv_uploads WHERE key = $1 AND claimed_by IS NULL`, [key])).length > 0;
+};
+
 /** Who attached the CV and where (sign-up, personal area, staff edit, application, guest application). */
 export type CvAttachAudit = { via: 'signup' | 'profile' | 'staff_edit' | 'application' | 'guest_application'; actor?: string; kind?: 'user' | 'guest' };
 

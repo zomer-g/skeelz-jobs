@@ -21,7 +21,7 @@ import { mailEditRequestDecision } from '../mail/triggers.js';
 import { changesToJobUpdate, compareEditRequest, jobToEditable } from '../security/employer.js';
 import { safeErrorText } from '../security/pure.js';
 import { canManageContent } from '../models/enums.js';
-import { CONTENT_MANAGER_FIELDS, CONTENT_MANAGER_REQUIRED } from '../security/roleFields.js';
+import { CONTENT_MANAGER_FIELDS, CONTENT_MANAGER_REQUIRED, OWN_EMPLOYER_ACCOUNT, OWN_EMPLOYER_ACCOUNT_MESSAGE } from '../security/roleFields.js';
 import { cleanReason, descriptionToHtml } from '../services/jobSubmissionRules.js';
 import * as customFields from '../services/customFieldsService.js';
 import { asCustomValues, checkCustomValues, CustomValue } from '../models/schemas/customFields.js';
@@ -38,11 +38,16 @@ const extraComparison = async (changes: any, base: any, jobCustom: unknown) => {
     requested, changedSince: !!base?.customFields && id in base.customFields && (base.customFields[id] ?? null) !== (cur[id] ?? null),
   }));
 };
-/** Requested answers still valid now (a field turned off or an option removed since is dropped, never refused). */
-const stillValid = async (asked: Record<string, CustomValue | null>): Promise<Record<string, CustomValue | null>> => {
+/** Requested answers still valid now (a field turned off or an option removed since is dropped, never refused).
+ *  A field the job page showed when the employer asked (it is in base) and that is staff-only now is dropped too
+ *  (security review 24.11.2026, L4): what the employer wrote as a public answer never lands in a staff-only field. */
+const stillValid = async (asked: Record<string, CustomValue | null>, base: any): Promise<Record<string, CustomValue | null>> => {
   const defs = await customFields.definitionsOf('job');
+  const nowStaffOnly = new Set(defs.filter((d) => !d.showOnJobPage).map((d) => d.id));
+  const wasShown = (id: string) => !!base?.customFields && Object.prototype.hasOwnProperty.call(base.customFields, id);
   const out: Record<string, CustomValue | null> = {};
   for (const [id, v] of Object.entries(asked)) {
+    if (wasShown(id) && nowStaffOnly.has(id)) continue;
     const r = checkCustomValues(defs, { [id]: v === null ? '' : v });
     if (r.ok && id in r.values) out[id] = r.values[id];
   }
@@ -88,6 +93,11 @@ export const approve = async (req: Request, res: Response, next: NextFunction) =
   try {
     const r = await employerDAL.getEditRequest(id);
     if (!r || r.status !== 'pending') return notPending(res);
+    // Never one's own employer account's request (L3): another staff member approves it.
+    if (r.userId === req.authUser?.id) {
+      auditDenied(req, OWN_EMPLOYER_ACCOUNT);
+      return res.status(403).json({ message: OWN_EMPLOYER_ACCOUNT_MESSAGE, code: OWN_EMPLOYER_ACCOUNT });
+    }
     // A change of the threshold condition or of an apply setting (set, changed or cleared) is approved by a content
     // manager, not a coordinator (roleFields.CONTENT_MANAGER_FIELDS; owner, 19.11 and 24.11.2026).
     const restricted = CONTENT_MANAGER_FIELDS.filter((f) => f in (r.changes ?? {}));
@@ -101,7 +111,7 @@ export const approve = async (req: Request, res: Response, next: NextFunction) =
     const update = changesToJobUpdate(std, descriptionToHtml);
     const job = await jobsService.updateJobById(r.jobId, update as any, 'screen'); // refuses an imported job (409)
     if (!job) throw new Error('job not found');
-    if (askedExtra) await customFields.saveJobValues(r.jobId, await stillValid(askedExtra));
+    if (askedExtra) await customFields.saveJobValues(r.jobId, await stillValid(askedExtra, r.base));
     const fields = fieldNames(r.changes);
     void writeAudit(who, 'jobs.edit_request_approved', id, { job: r.jobId, fields });
     void mailEditRequestDecision(r, { approved: true }); // the employer is told (when the event is on; src/mail)

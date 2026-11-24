@@ -1,4 +1,4 @@
-import { isCandidate } from '../models/enums.js';
+import { isCandidate, isEmployer, STAFF_ROLES } from '../models/enums.js';
 // Fields content managers add to the sign-up form and the job form (models/schemas/customFields.ts, docs/settings.md).
 // One process, so the definitions are held in memory and refreshed on every write and at least every minute; reads that
 // can't wait (rowToJob, which is synchronous) use the last loaded copy and fail CLOSED: with nothing loaded, no added
@@ -42,6 +42,13 @@ export const allDefinitions = async (): Promise<CustomFieldDef[]> => {
 
 export const definitionsOf = async (form: CustomFieldForm): Promise<CustomFieldDef[]> =>
   (await allDefinitions()).filter((d) => d.form === form);
+
+/** The job form's added fields an employer-facing caller may see and fill (security review 24.11.2026, L5): every one
+ *  for a signed-in employer or staff member (owner, 24.11.2026: employers edit every field, staff-only ones write-only);
+ *  for anyone else (the anonymous employer form) only the ones the job page shows. */
+export const employerFacing = (defs: CustomFieldDef[], caller: { roles?: readonly string[] | null; role?: string | null } | null | undefined): CustomFieldDef[] =>
+  caller && (isEmployer(caller) || (caller.roles?.length ? caller.roles : [caller.role]).some((r) => STAFF_ROLES.includes(r as any)))
+    ? defs : defs.filter((d) => d.showOnJobPage);
 
 /** The last loaded copy (synchronous; may be a minute old). Starts a refresh when it is stale. */
 export const cachedDefinitions = (form: CustomFieldForm): CustomFieldDef[] => {

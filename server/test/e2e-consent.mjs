@@ -272,14 +272,14 @@ try {
     assert.equal(sentToSmoove(email), true);
   });
 
-  await check('guest: the same address twice for the same job → 400 jb13, nothing stored the second time', async () => {
+  await check('guest: the same address twice for the same job → the same answer as a new one, nothing stored the second time', async () => {
     const email = `guest-twice-${stamp}@example.test`;
-    assert.equal((await guestApply(email, { consent: true })).status, 200);
+    const first = await guestApply(email, { consent: true });
+    assert.equal(first.status, 200);
     const again = await guestApply(email.toUpperCase(), { consent: true, marketingConsent: true });
-    assert.equal(again.status, 400, again.text);
-    assert.equal(again.json.code, 'jb13');
-    // Only "this address already applied to this job": no name, no account, no other job.
-    assert.ok(!/Guest Consent|user exists|account/i.test(again.text), again.text);
+    // Security review 24.11.2026, L6: nobody learns from the answer whether an address applied to a job.
+    assert.equal(again.status, 200, again.text);
+    assert.equal(again.text, first.text);
     assert.equal(Number((await one('SELECT count(*) AS n FROM guest_applications WHERE job_id = $1 AND email = $2', [jobId, email])).n), 1);
     assert.equal(Number((await one('SELECT count(*) AS n FROM guest_consents WHERE email = $1', [email])).n), 1);
   });

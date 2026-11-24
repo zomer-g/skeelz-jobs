@@ -263,7 +263,7 @@ answers are stored only then: a refused application stores no consent, and a mis
 `{ consent: true, marketingConsent? }` stores the terms (+ the marketing answer only if never answered) with a
 `consent_records` row in the same statement (source `first_signin`; logged as `user.terms_accepted`). "Not now" keeps
 them signed in but unable to apply until they accept (the apply dialog asks again). One quick application per address
-and job: a second one is refused (400 `jb13`, "already applied with this address" — nothing about an account).
+and job: a second one gets the same answer as a new one and nothing is stored or mailed (review 24.11.2026, L6).
 Bump `TERMS_VERSION` when the terms change in a way that needs a new agreement.
 
 **Versions and the acceptance log (owner, 19.11.2026).** Every version of the privacy policy + terms has an id
@@ -511,6 +511,19 @@ reviews too. Employer submissions: 12 months after review, or after sending if n
   only with `STRICT_SECRETS=true`.
 - Job lists for the site (board, map, page data) carry no employer contact details and no `uploadBy`; the
   self-apply view reads them from `GET /api/jobs/:jobId`.
+- Low-severity fixes of the review of 24.11.2026:
+  - L3: a staff member never approves a submission or an edit request of their OWN employer account, nor forwards
+    candidates to it (403 `own_employer_account`, `security/roleFields.ts`). Another staff member handles it.
+  - L4: an edit request's answer to a field the job page showed when the employer asked, and that is staff-only by
+    the time of approval, is not written (`jobEditRequestController.stillValid`).
+  - L5: `GET /custom-fields/job` gives staff-only fields (not shown on the job page) only to a signed-in employer or
+    staff member; the anonymous employer form neither sees nor stores them (`customFieldsService.employerFacing`).
+  - L6: a repeated quick application (same address and job) gets the same answer as a new one; nothing is stored,
+    claimed or mailed, so the answer never tells whether an address applied.
+  - L9: emails to addresses nobody verified (a guest's confirmation and "job closed", the employer form's decision)
+    carry the name as one plain word only (dropped when it looks like a link or an address), and each such address
+    gets a few of them a day at most (`mail/triggers.ts unverifiedName` / `unverifiedAllowed`, counted in memory by a
+    keyed hash).
 
 ## Not covered (honest list)
 - The DB owner role can drop the append-only trigger. Stronger: a separate DB role with INSERT/SELECT only on

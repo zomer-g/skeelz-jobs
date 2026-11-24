@@ -27,6 +27,7 @@ const REFUSALS: Record<string, { status: number; message: string }> = {
   employer_inactive: { status: 409, message: 'חשבון המעסיק מושבת.' },
   window_closed: { status: 409, message: 'המשרה נסגרה לפני יותר מ-90 יום, ולכן אי אפשר להעביר אליה מועמדים.' },
   already_forwarded: { status: 409, message: 'המועמדות כבר הועברה למעסיק.' },
+  own_employer_account: { status: 403, message: 'אי אפשר להעביר מועמדים לחשבון המעסיק שלך. איש צוות אחר מטפל בזה.' },
   forward_not_found: { status: 404, message: 'ההעברה לא נמצאה.' },
   forward_cancelled: { status: 409, message: 'ההעברה כבר בוטלה.' },
   forward_seen: { status: 409, message: 'המעסיק כבר צפה במועמדות, ולכן אי אפשר לבטל את ההעברה.' },
@@ -64,7 +65,7 @@ export const forward = async (req: Request, res: Response, next: NextFunction) =
       return res.status(400).json({ message: 'kind (application | guest) and applicationId are required', code: 'bad_request' });
     }
     const by = actorOf(req);
-    const r = await forwardDAL.createForward(kind, applicationId, by);
+    const r = await forwardDAL.createForward(kind, applicationId, by, req.authUser?.id ?? null);
     if (!r.ok) return refuse(res, r.code);
     const f = r.forward;
     try {

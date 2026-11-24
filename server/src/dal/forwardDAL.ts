@@ -186,11 +186,11 @@ export const forwardInfo = async (kind: ForwardKind, applicationIds: string[]) =
   return out;
 };
 
-export type ForwardRefusal = 'application_not_found' | 'no_employer' | 'employer_inactive' | 'window_closed' | 'already_forwarded';
+export type ForwardRefusal = 'application_not_found' | 'no_employer' | 'employer_inactive' | 'window_closed' | 'already_forwarded' | 'own_employer_account';
 export type ForwardRecord = { id: string; kind: ForwardKind; applicationId: string; candidateId: string; jobId: string; employerId: string };
 
 /** Forwards one application to the job's employer. Ownership, job state and the window are read from the DB. */
-export const createForward = async (kind: ForwardKind, applicationId: string, by: string):
+export const createForward = async (kind: ForwardKind, applicationId: string, by: string, byUserId: string | null = null):
   Promise<{ ok: true; forward: ForwardRecord } | { ok: false; code: ForwardRefusal }> => {
   if (!isObjectId(applicationId)) return { ok: false, code: 'application_not_found' };
   const app = kind === 'guest'
@@ -206,6 +206,8 @@ export const createForward = async (kind: ForwardKind, applicationId: string, by
        LEFT JOIN job_inactive_since jis ON jis.job_id = j.id
       WHERE ej.job_id = $1`, [app.job_id]);
   if (!job) return { ok: false, code: 'no_employer' };
+  // Never to the forwarding staff member's own employer account (security review 24.11.2026, L3).
+  if (byUserId && job.employer_id === byUserId) return { ok: false, code: 'own_employer_account' };
   if (job.e_deactivated) return { ok: false, code: 'employer_inactive' };
   if (!employerWindowOpen({ status: job.status, deletedAt: job.deleted_at }, job.since)) return { ok: false, code: 'window_closed' };
   const id = newObjectId();

@@ -27,14 +27,16 @@ import * as settingsService from '../services/settingsService.js';
 import * as employerDAL from '../dal/employerDAL.js';
 import { queueSalesforce } from '../services/salesforceSync.js';
 import { postingRefusal } from '../security/employer.js';
-import { CONTENT_MANAGER_REQUIRED, thresholdNeedsContentManager } from '../security/roleFields.js';
+import { CONTENT_MANAGER_REQUIRED, OWN_EMPLOYER_ACCOUNT, OWN_EMPLOYER_ACCOUNT_MESSAGE, thresholdNeedsContentManager } from '../security/roleFields.js';
 import { thresholdConditionOf } from '../models/schemas/thresholdCondition.js';
 import * as customFields from '../services/customFieldsService.js';
 import { checkCustomValues, CustomValue, errorCodesOf, mergeCustomValues, shownValues } from '../models/schemas/customFields.js';
 
 /** The job form's added fields (settings screen) in the employer form: same rules as the staff form. */
-const checkExtra = async (raw: unknown, requireAll: boolean, errors: FieldErrors): Promise<Record<string, CustomValue | null>> => {
-  const defs = await customFields.definitionsOf('job');
+const checkExtra = async (raw: unknown, requireAll: boolean, errors: FieldErrors, caller: Request['authUser'] | 'staff'): Promise<Record<string, CustomValue | null>> => {
+  const all = await customFields.definitionsOf('job');
+  // The anonymous employer form: only the fields the job page shows (L5); a staff-only answer is dropped, never stored.
+  const defs = caller === 'staff' ? all : customFields.employerFacing(all, caller);
   const r = checkCustomValues(defs, raw, { requireAll });
   if (!r.ok) Object.assign(errors, errorCodesOf(defs, raw, r.bad));
   return r.ok ? r.values : {};
@@ -99,7 +101,7 @@ export const submit = async (req: Request, res: Response, next: NextFunction) =>
       return res.status(201).json({ data: { message: 'received' } });
     }
     const { value, errors } = validateSubmission(body);
-    const extra = await checkExtra(body.customFields, true, errors);
+    const extra = await checkExtra(body.customFields, true, errors, req.authUser);
     // The required box is checked by validateSubmission (errors.consent); the optional marketing box here.
     const consent = checkConsent(body, { needTerms: true, askMarketing: true });
     if (consent.error === 'marketing_invalid' || consent.error === 'marketing_required') errors.marketingConsent = consent.error === 'marketing_invalid' ? 'invalid' : 'required';
@@ -153,7 +155,7 @@ export const get = async (req: Request, res: Response, next: NextFunction) => {
 export const edit = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { value, errors } = validateSubmission(req.body ?? {}, { partial: true });
-    const extra = req.body?.customFields === undefined ? {} : await checkExtra(req.body.customFields, false, errors);
+    const extra = req.body?.customFields === undefined ? {} : await checkExtra(req.body.customFields, false, errors, 'staff');
     if (!Object.keys(errors).length) await checkReferences(value, errors);
     if (Object.keys(errors).length) return invalid(res, errors);
     if ('thresholdCondition' in value && !canManageContent(req.authUser?.role)) {
@@ -180,7 +182,13 @@ export const approve = async (req: Request, res: Response, next: NextFunction) =
   let claimed: dal.Submission | null = null;
   try {
     // A submission with a threshold condition is approved by a content manager (or an admin), not a coordinator.
-    if (thresholdNeedsContentManager(req.authUser?.role, (await dal.get(id))?.thresholdCondition)) return needsContentManager(res);
+    const cur = await dal.get(id);
+    if (thresholdNeedsContentManager(req.authUser?.role, cur?.thresholdCondition)) return needsContentManager(res);
+    // Never one's own employer account's submission (L3): another staff member approves it.
+    if (cur?.ownerId && cur.ownerId === req.authUser?.id) {
+      auditDenied(req, OWN_EMPLOYER_ACCOUNT);
+      return res.status(403).json({ message: OWN_EMPLOYER_ACCOUNT_MESSAGE, code: OWN_EMPLOYER_ACCOUNT });
+    }
     claimed = await dal.claimForApproval(id, who);
     if (!claimed) return res.status(409).json({ message: 'Submission not found or no longer pending', code: 'submission_not_pending' });
     const job = await jobsService.createJob({

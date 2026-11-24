@@ -61,8 +61,11 @@ export const customErrors = (fields: FormField[], values: CustomValues | undefin
 
 let publicJobFields: FormField[] = [];
 let publicJobCache: Promise<FormField[]> | null = null;
-/** GET /api/custom-fields/job (public): the job form's added fields, for the employer form and edit requests. */
-export const loadPublicJobFields = (): Promise<FormField[]> => {
+/** GET /api/custom-fields/job (public): the job form's added fields, for the employer form and edit requests.
+ *  The staff-only ones come only for a signed-in employer or staff member (security review 24.11.2026, L5), so the
+ *  list is loaded again by every form that opens (`fresh`), never kept from before a sign-in. */
+export const loadPublicJobFields = (fresh = true): Promise<FormField[]> => {
+  if (fresh) publicJobCache = null;
   if (!publicJobCache) {
     publicJobCache = fetch('/api/custom-fields/job', { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
