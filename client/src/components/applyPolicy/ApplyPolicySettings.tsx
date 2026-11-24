@@ -1,24 +1,40 @@
 import React, { useEffect, useState } from 'react';
-import { FormControlLabel } from '@mui/material';
 import { i18n } from '../../i18n/I18n';
-import IOSSwitch from '../common/IosSwitch';
-import Button from '../common/Button';
 import CircularLoader from '../common/CircularLoader';
 import SettingsService from '../../services/api/Settings.service';
 import useToastStore from '../../store/Toast.store';
 import { ApplyPolicy } from '../../models/interfaces/Props.interfaces';
 import { isString } from '../../utils/utils';
+import SaveButton from '../settings/SaveButton';
+import { CV_RULES, cvRuleLabel, GUEST_MODES, guestModeHint, guestModeLabel } from '../../utils/applyPolicy';
 
 interface ApplyPolicySettingsProps {
-    onClose: () => void;
     onSaved?: (value: ApplyPolicy) => void;
 }
 
-/** Admin screen for the site-wide apply policy defaults. */
-const ApplyPolicySettings: React.FC<ApplyPolicySettingsProps> = ({ onClose, onSaved }) => {
+/**
+ * Site-wide defaults for the ways to apply ("הגדרות הגשה"): what a visitor who is not signed in can do
+ * (self / quick / closed), and whether a CV is required on a quick and on a regular application.
+ * Each job can override each of them (jobs-management table / job form).
+ */
+/** A native radio (keyboard and screen readers work as usual). */
+export const Radio: React.FC<{ name: string; value: string; label: string; checked: boolean; describedBy?: string; onChange: () => void }> = ({
+    name, value, label, checked, describedBy, onChange,
+}) => (
+    <div className="form-check apply-settings__radio">
+        <input className="form-check-input float-none mx-1" type="radio" id={`${name}-${value}`} name={name} value={value}
+            checked={checked} onChange={onChange} aria-describedby={describedBy} />
+        <label className="form-check-label font-RubikMedium" htmlFor={`${name}-${value}`}>{label}</label>
+    </div>
+);
+
+// On the settings screen (/settings) only. The employer posting setting is in the job-posting section
+// (EmployerPostingSettings, owner 23.11.2026).
+const ApplyPolicySettings: React.FC<ApplyPolicySettingsProps> = ({ onSaved }) => {
     const t = i18n.getTranslations().ApplyPolicy;
     const { showToast } = useToastStore();
     const [values, setValues] = useState<ApplyPolicy | null>(null);
+    const [failed, setFailed] = useState(false);
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
@@ -26,7 +42,7 @@ const ApplyPolicySettings: React.FC<ApplyPolicySettingsProps> = ({ onClose, onSa
             const result = await SettingsService.getInstance().getApplyPolicy();
             if (isString(result)) {
                 showToast(result, 'error');
-                onClose();
+                setFailed(true);
                 return;
             }
             setValues(result);
@@ -37,54 +53,50 @@ const ApplyPolicySettings: React.FC<ApplyPolicySettingsProps> = ({ onClose, onSa
         if (!values) return;
         setSaving(true);
         const result = await SettingsService.getInstance().updateApplyPolicy(values);
-        setSaving(false);
         if (isString(result)) {
+            setSaving(false);
             showToast(result, 'error');
             return;
         }
+        setSaving(false);
         showToast(t.Saved, 'success');
         onSaved?.(result);
-        onClose();
     };
 
+    if (failed) return <p role="alert" className="sec-note">{t.LoadFailed}</p>;
     if (!values) return <div className="p-5"><CircularLoader /></div>;
 
-    const row = (key: keyof ApplyPolicy, label: string, hint: string, disabled = false) => (
-        <div className="d-flex align-items-start py-2">
-            <FormControlLabel
-                label=""
-                className="m-0 pe-2 ps-2"
-                control={
-                    <IOSSwitch
-                        sx={{ m: 1 }}
-                        checked={values[key]}
-                        disabled={disabled}
-                        inputProps={{ 'aria-label': label }}
-                        onChange={(_e, checked) => setValues({ ...values, [key]: checked })}
-                    />
-                }
-            />
-            <div>
-                <div className="font-RubikMedium">{label}</div>
-                <div className="font-RubikSmall text-color-dark-grey">{hint}</div>
+    const cvGroup = (key: 'quickCv' | 'regularCv', label: string, hint: string) => (
+        <fieldset className="apply-settings__group" aria-describedby={`apply-settings-${key}-hint`}>
+            <legend className="font-RubikMedium fs-6 mb-1">{label}</legend>
+            <div id={`apply-settings-${key}-hint`} className="font-RubikSmall text-color-dark-grey mb-1">{hint}</div>
+            <div className="d-flex flex-wrap gap-3">
+                {CV_RULES.map((r) => (
+                    <Radio key={r} name={`apply-settings-${key}`} value={r} label={cvRuleLabel(r)}
+                        checked={values[key] === r} onChange={() => setValues({ ...values, [key]: r })} />
+                ))}
             </div>
-        </div>
+        </fieldset>
     );
 
     return (
-        <div className="p-4">
+        <div className="apply-settings">
             <p className="font-RubikSmall pb-2">{t.SettingsInstructions}</p>
-            {row('quickApply', t.QuickApply, t.QuickApplyHint)}
-            {row('quickApplyWithoutCv', t.QuickApplyWithoutCv,
-                values.quickApply ? t.QuickApplyWithoutCvHint : `${t.QuickApplyWithoutCvHint} · ${t.OnlyWhenQuickApply}`,
-                !values.quickApply)}
-            <div className="d-flex justify-content-end gap-3 pt-4">
-                <Button className="font-RubikMedium bg-white text-color-dark-green-2 border-color-dark-green-2 rounded-pill px-4" onClick={onClose}>
-                    {t.Cancel}
-                </Button>
-                <Button className="bg-color-purple-btn rounded-pill px-4" onClick={save} disabled={saving}>
-                    {t.Save}
-                </Button>
+            <fieldset className="apply-settings__group" aria-describedby="apply-settings-guest-hint">
+                <legend className="font-RubikMedium fs-6 mb-1">{t.GuestModeLabel}</legend>
+                <div id="apply-settings-guest-hint" className="font-RubikSmall text-color-dark-grey mb-1">{t.GuestModeHint}</div>
+                {GUEST_MODES.map((m) => (
+                    <div key={m} className="apply-settings__option">
+                        <Radio name="apply-settings-guest" value={m} label={guestModeLabel(m)} describedBy={`apply-settings-guest-${m}-hint`}
+                            checked={values.guestMode === m} onChange={() => setValues({ ...values, guestMode: m })} />
+                        <div id={`apply-settings-guest-${m}-hint`} className="font-RubikSmall text-color-dark-grey apply-settings__option-hint">{guestModeHint(m)}</div>
+                    </div>
+                ))}
+            </fieldset>
+            {cvGroup('quickCv', t.QuickCvLabel, t.QuickCvHint)}
+            {cvGroup('regularCv', t.RegularCvLabel, t.RegularCvHint)}
+            <div className="d-flex align-items-center gap-3 mt-3 flex-wrap">
+                <SaveButton onClick={save} disabled={saving} testId="apply-settings-save" />
             </div>
         </div>
     );

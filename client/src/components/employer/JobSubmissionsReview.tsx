@@ -7,16 +7,21 @@ import useLanguageStore from '../../store/Language.store';
 import { getLocalizedDictionary } from '../../i18n/i18nHelper';
 import { LocalizedDataKey } from '../../i18n/General.enums';
 import SubmissionFields, { ErrorSummary, Errors, SubmissionValues, validate } from './SubmissionFields';
+import EditRequestsReview from './EditRequestsReview';
 
 type Status = 'pending' | 'approved' | 'rejected';
 type Summary = {
   id: string; status: Status; title: string; companyName: string; citySymbol: number; city: string | null;
-  createdAt: string; reviewedAt: string | null; reviewedBy: string | null; jobId: string | null;
+  createdAt: string; reviewedAt: string | null; reviewedBy: string | null; jobId: string | null; byAccount?: boolean;
 };
 type Full = Summary & {
   jobScope: string[]; requiredSkills: string[]; requiredSkillsDetails: Record<string, string>; description: string;
   externalLink: string | null; publicEmail: string | null; contactName: string; contactEmail: string; contactPhone: string;
+  thresholdCondition: string | null;
   consentAt: string; rejectReason: string | null;
+  /** Answers to the job form's added fields (by id) and, with labels, for showing. */
+  customFields?: Record<string, string | boolean>;
+  extraFields?: { id: string; label: string; value: string; active: boolean }[];
 };
 
 const api = async (path: string, init?: RequestInit) => {
@@ -34,13 +39,18 @@ const fmt = (s: string | null | undefined) => (s ? new Date(s).toLocaleString('h
 const toValues = (s: Full): SubmissionValues => ({
   title: s.title, companyName: s.companyName, citySymbol: String(s.citySymbol), jobScope: s.jobScope, requiredSkills: s.requiredSkills,
   description: s.description, externalLink: s.externalLink ?? '', publicEmail: s.publicEmail ?? '', contactName: s.contactName,
-  contactEmail: s.contactEmail, contactPhone: s.contactPhone,
+  contactEmail: s.contactEmail, contactPhone: s.contactPhone, thresholdCondition: s.thresholdCondition ?? '',
+  customFields: { ...(s.customFields ?? {}) },
 });
 
 const JobSubmissionsReview: React.FC = () => {
   const { currentLanguage } = useLanguageStore();
   const t = i18n.getTranslations().EmployerForm;
   const scopeLabels = getLocalizedDictionary(LocalizedDataKey.JOB_SCOPE, currentLanguage);
+  const te = i18n.getTranslations().Employers;
+  // Two queues on this screen: new jobs from employers, and employers' edit requests for published jobs.
+  const [view, setView] = useState<'submissions' | 'edits'>(() =>
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'edits' ? 'edits' : 'submissions');
   const [status, setStatus] = useState<Status>('pending');
   const [items, setItems] = useState<Summary[]>([]);
   const [counts, setCounts] = useState<Record<Status, number>>({ pending: 0, approved: 0, rejected: 0 });
@@ -117,6 +127,15 @@ const JobSubmissionsReview: React.FC = () => {
     <div dir={i18n.isRTL() ? 'rtl' : 'ltr'} className="p-4">
       <h1 className="pt-3 pb-3 font-EzerRegularLoft display-6">{t.ReviewTitle}</h1>
 
+      <nav aria-label={t.ReviewTitle} className="d-flex gap-2 mb-4 border-bottom pb-2 flex-wrap">
+        {([['submissions', te.ReviewTabSubmissions], ['edits', te.ReviewTabEdits]] as const).map(([v, l]) => (
+          <button key={v} type="button" aria-pressed={view === v}
+            className={`btn rounded-0 border-0 font-RubikMedium ${view === v ? 'border-bottom border-3 border-dark' : 'text-muted'}`}
+            onClick={() => { setOpen(null); setView(v); }}>{l}</button>
+        ))}
+      </nav>
+
+      {view === 'edits' ? <EditRequestsReview /> : <>
       <div role="tablist" aria-label={t.ReviewTitle} className="d-flex gap-2 mb-3">
         {tabs.map(([s, label]) => (
           <button key={s} type="button" role="tab" aria-selected={status === s}
@@ -142,7 +161,7 @@ const JobSubmissionsReview: React.FC = () => {
           <tbody>
             {items.map((s) => (
               <tr key={s.id} style={open?.id === s.id ? { background: '#f3f0ff' } : undefined}>
-                <td style={cell}>{s.title}</td><td style={cell}>{s.companyName}</td><td style={cell}>{s.city ?? s.citySymbol}</td>
+                <td style={cell}>{s.title}{s.byAccount && <div className="small text-muted"><i className="bi bi-person-badge ms-1 me-1" aria-hidden="true" />{te.ByAccount}</div>}</td><td style={cell}>{s.companyName}</td><td style={cell}>{s.city ?? s.citySymbol}</td>
                 <td style={cell}>{fmt(s.createdAt)}</td>
                 {status !== 'pending' && <td style={cell}>{fmt(s.reviewedAt)} {s.reviewedBy ? `${t.By} ${s.reviewedBy}` : ''}</td>}
                 <td style={cell}>
@@ -180,6 +199,12 @@ const JobSubmissionsReview: React.FC = () => {
                 <dt className="col-sm-3">{t.Skills}</dt><dd className="col-sm-9">{open.requiredSkills.map((id) => open.requiredSkillsDetails[id] ?? id).join(', ')}</dd>
                 <dt className="col-sm-3">{t.ExternalLink}</dt><dd className="col-sm-9" dir="ltr">{open.externalLink ?? '—'}</dd>
                 <dt className="col-sm-3">{t.PublicEmail}</dt><dd className="col-sm-9" dir="ltr">{open.publicEmail ?? '—'}</dd>
+                <dt className="col-sm-3">{i18n.getTranslations().Threshold.Label}</dt><dd className="col-sm-9" dir="auto" style={{ whiteSpace: 'pre-wrap' }}>{open.thresholdCondition ?? '—'}</dd>
+                {(open.extraFields ?? []).map((f) => (
+                  <React.Fragment key={f.id}>
+                    <dt className="col-sm-3">{f.label}</dt><dd className="col-sm-9" dir="auto" style={{ whiteSpace: 'pre-wrap' }}>{f.value}</dd>
+                  </React.Fragment>
+                ))}
                 <dt className="col-sm-3">{t.Sent}</dt><dd className="col-sm-9">{fmt(open.createdAt)}</dd>
                 {open.status !== 'pending' && <><dt className="col-sm-3">{t.Reviewed}</dt><dd className="col-sm-9">{fmt(open.reviewedAt)} {open.reviewedBy ? `${t.By} ${open.reviewedBy}` : ''}</dd></>}
                 {open.rejectReason && <><dt className="col-sm-3">{t.RejectReason}</dt><dd className="col-sm-9" style={{ whiteSpace: 'pre-wrap' }}>{open.rejectReason}</dd></>}
@@ -222,6 +247,7 @@ const JobSubmissionsReview: React.FC = () => {
           )}
         </section>
       )}
+      </>}
     </div>
   );
 };

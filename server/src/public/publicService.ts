@@ -113,7 +113,8 @@ const baseFilter = async (input: JobSearchInput): Promise<filterOptions> => ({
 /** Jobs near a point, nearest first (location filters are replaced by the radius). */
 export const jobsNear = async (input: JobSearchInput & { near: NearInput }): Promise<NearPage> => {
   const { lat, lng, radiusKm } = input.near;
-  const r = await jobDAL.findActiveJobsNear(lat, lng, radiusKm, { ...(await baseFilter(input)), limit: PUBLIC_LIMITS.maxNearResults });
+  // withContacts: the public API / MCP carry the employer's contact on self-apply jobs (applyContact, publicJob.ts).
+  const r = await jobDAL.findActiveJobsNear(lat, lng, radiusKm, { ...(await baseFilter(input)), limit: PUBLIC_LIMITS.maxNearResults }, { withContacts: true });
   const all = r.jobs.map(toPublicNearJob).filter((j): j is PublicNearJob => j !== null);
   const start = (input.page - 1) * input.limit;
   return {
@@ -137,7 +138,7 @@ export const searchJobs = async (input: JobSearchInput): Promise<JobPage | NearP
     page: input.page,
     limit: input.limit,
   };
-  const { jobs, total } = await jobDAL.findJobs(filter, PUBLIC_WHERE);
+  const { jobs, total } = await jobDAL.findJobs(filter, PUBLIC_WHERE, { withContacts: true });
   return { data: publicJobs(jobs), page: input.page, limit: input.limit, total };
 };
 

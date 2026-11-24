@@ -26,6 +26,10 @@ export class UpdateUserDto {
   @IsOptional()
   gender?: string;
 
+  @IsString()
+  @IsOptional()
+  idNumber?: string | null;
+
   @IsNumber()
   @IsOptional()
   citySymbol?: number;

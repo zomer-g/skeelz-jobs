@@ -1,7 +1,7 @@
 // Sign-in end to end, against a running LOCAL server configured for the mock provider (see helpers/staffLogin.mjs),
 // plus a second server this script starts itself with no providers configured.
 //   BASE=http://localhost:3100 node test/e2e-auth.mjs
-// Covers: candidate password login; staff password login and password reset refused; "Continue with Google" = xhostd
+// Covers: candidate sign-up / sign-in by a code sent by email; the password routes gone; staff get no code; "Continue with Google" = xhostd
 // SSO for staff (existing staff only, never created/promoted) and for candidates (new identity -> the sign-up form,
 // created only when it is sent, email from the SSO identity; existing candidate -> linked; an account without a phone
 // -> asked to complete it); the personal area (own record only, allowlisted fields, staff refused); token refusals;
@@ -16,12 +16,12 @@ import crypto from 'node:crypto';
 import pg from 'pg';
 import { PDFDocument } from 'pdf-lib';
 import { mockIdp, xhostdSignIn, signedInOk, signInError, subFor } from './helpers/staffLogin.mjs';
+import { signUp, candidateLogin } from './helpers/candidate.mjs';
 (await import('dotenv')).config();
 
 const BASE = process.env.BASE || 'http://localhost:3100';
 if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(BASE)) throw new Error('e2e writes data: run it against localhost only');
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@example.test').toLowerCase();
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'dev-admin-password-123';
 const CM_EMAIL = (process.env.CM_EMAIL || 'content@example.test').toLowerCase();
 const UNCONFIGURED_PORT = Number(process.env.UNCONFIGURED_PORT || 3104);
 
@@ -80,7 +80,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const unconfigured = spawn(process.execPath, ['dist/index.js'], {
   cwd: path.resolve(here, '..'),
   env: { ...process.env, PORT: String(UNCONFIGURED_PORT), XHOST_HTTP_PORT: String(UNCONFIGURED_PORT),
-    SSO_ENABLED: 'false', DB_POOL_MAX: '2' },
+    SSO_ENABLED: 'false', ENABLE_MICROSOFT_SSO: 'false', EMAIL_CODE_SIGNIN_ENABLED: 'false', DB_POOL_MAX: '2' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 const offBase = `http://localhost:${UNCONFIGURED_PORT}`;
@@ -93,12 +93,21 @@ try {
   await check('SSO off: providers report it off (the Google button is hidden)', async () => {
     const r = await jar(offBase).req('GET', '/api/auth/providers');
     assert.equal(r.status, 200);
-    assert.deepEqual(r.json.data, { password: true, sso: false, ssoLogoutUrl: null });
+    assert.deepEqual(r.json.data, { password: false, emailCode: false, sso: false, ssoLogoutUrl: null, microsoft: false });
   });
   await check('SSO off: start refuses with signin_error=disabled (no redirect to xhostd)', async () => {
     const r = await jar(offBase).req('GET', '/api/auth/xhostd/start?return_to=/');
     assert.equal(r.status, 302);
     assert.equal(loc(r), '/?signin_error=disabled');
+  });
+  await check('email code off (EMAIL_CODE_SIGNIN_ENABLED not true): every route answers 503 au18 and nothing is stored', async () => {
+    const email = `off-${stamp}@example.test`;
+    for (const [m, p, b] of [['POST', '/api/auth/email/request', { email }], ['POST', '/api/auth/email/verify', { email, code: '123456' }],
+      ['POST', '/api/auth/email/signup', { email }], ['POST', '/api/dev/email-code', { email }]]) {
+      const r = await jar(offBase).req(m, p, b);
+      assert.equal(r.status, 503, `${p}: ${r.status} ${r.text}`); assert.equal(r.json.code, 'au18', p);
+    }
+    assert.equal((await jar(offBase).req('GET', '/api/auth/email/signup')).json.data, null);
   });
   await check('the old direct-Google routes are gone', async () => {
     assert.equal((await jar(offBase).req('GET', '/api/auth/google/start')).status, 404);
@@ -114,44 +123,44 @@ await check('SSO on: providers report it (the Google button shows) with the xhos
   assert.ok(r.json.data.ssoLogoutUrl);
 });
 
-// --- candidates: password ---------------------------------------------------
+// --- candidates: a code by email (no passwords) ---------------------------------
 const candEmail = `auth-cand-${stamp}@example.test`;
 let candId;
-await check('candidate signs up and signs in with a password', async () => {
+await check('candidate signs up and signs in with a code by email', async () => {
   const c = jar();
-  const r = await c.req('POST', '/api/users', {
+  const r = await signUp(c, {
     firstName: 'Auth', lastName: 'Cand', email: candEmail, phoneNumber: `05${String(stamp).slice(-8)}`,
-    dateOfBirth: '1990-01-01T00:00:00.000Z', gender: 'other', citySymbol: 9000, password: 'secret-pass-1', skills: [], hasAppliedToJob: false,
+    dateOfBirth: '1990-01-01T00:00:00.000Z', gender: 'other', citySymbol: 9000, skills: [], hasAppliedToJob: false, consent: true,
   });
   assert.equal(r.status, 200, r.text);
   candId = r.json.data._id ?? r.json.data.user?._id;
   const c2 = jar();
-  const l = await c2.req('POST', '/api/login', { email: candEmail, password: 'secret-pass-1' });
+  const l = await candidateLogin(c2, candEmail);
   assert.equal(l.status, 200, l.text);
   assert.equal(l.json.data.user.role, 'user');
+  assert.equal(l.json.data.user.password, undefined);
   const s = await c2.req('GET', '/api/auth/session');
   assert.equal(s.json.data.user.email, candEmail);
 });
 
-// --- staff: password refused --------------------------------------------------
-await check('staff password login is refused (403 au10), with no session', async () => {
+// --- passwords are gone; staff get no code --------------------------------------
+await check('the password routes are gone (sign-in, sign-up, reset)', async () => {
+  for (const [m, p, b] of [['POST', '/api/login', { email: candEmail, password: 'secret-pass-1' }], ['POST', '/api/users', { email: `x-${stamp}@example.test`, password: 'x' }],
+    ['POST', '/api/password/reset/initiate', { email: candEmail }], ['POST', '/api/password/reset', { token: 'x', newPassword: 'Abcdefg1' }]]) {
+    const r = await jar().req(m, p, b);
+    assert.equal(r.status, 404, `${p}: ${r.status}`);
+  }
+});
+await check('staff: the code request answers like any address, and no code is sent or usable', async () => {
+  const a = await jar().req('POST', '/api/auth/email/request', { email: ADMIN_EMAIL });
+  const b = await jar().req('POST', '/api/auth/email/request', { email: `nobody-staff-${stamp}@example.test` });
+  assert.equal(a.status, 200, a.text);
+  assert.equal(a.text, b.text);
+  assert.equal((await jar().req('GET', `/api/dev/email-code?email=${encodeURIComponent(ADMIN_EMAIL)}`)).status, 404, 'a code was sent to staff');
   const c = jar();
-  const r = await c.req('POST', '/api/login', { email: ADMIN_EMAIL, password: ADMIN_PASSWORD });
-  assert.equal(r.status, 403, r.text);
-  assert.equal(r.json.code, 'au10');
+  const v = await c.req('POST', '/api/auth/email/verify', { email: ADMIN_EMAIL, code: '000000' });
+  assert.equal(v.status, 400); assert.equal(v.json.code, 'au12');
   assert.ok(!c.cookies.has('access_token') && !c.cookies.has('refresh_token'), 'tokens were set');
-  assert.equal((await c.req('GET', '/api/admin/security')).status !== 200, true);
-});
-await check('staff with a WRONG password gets the ordinary answer (staff emails not revealed)', async () => {
-  const a = await jar().req('POST', '/api/login', { email: ADMIN_EMAIL, password: 'wrong-password' });
-  const b = await jar().req('POST', '/api/login', { email: `nobody-${stamp}@example.test`, password: 'wrong-password' });
-  assert.equal(a.json?.code, b.json?.code);
-  assert.notEqual(a.json?.code, 'au10');
-});
-await check('staff password reset is refused (generic answer, no link)', async () => {
-  const r = await jar().req('POST', '/api/password/reset/initiate', { email: ADMIN_EMAIL });
-  assert.equal(r.status, 200);
-  assert.equal(r.json.data.message, 'If this email is registered, a reset link has been sent.');
 });
 
 // --- staff: xhostd SSO --------------------------------------------------------
@@ -169,7 +178,7 @@ await check('the activity log has the SSO login and the refusals', async () => {
   assert.equal(r.status, 200, r.text);
   const rows = r.json.data?.entries ?? r.json.data?.rows ?? r.json.data ?? [];
   const actions = new Set((Array.isArray(rows) ? rows : []).map((e) => e.action));
-  for (const a of ['auth.login_refused_staff_password', 'auth.login', 'auth.password_reset_refused_staff']) {
+  for (const a of ['auth.login', 'auth.email_code_refused_staff']) {
     if (!actions.has(a)) {
       // fall back to a broader search if the screen filters by actor only
       const all = await admin.req('GET', `/api/admin/audit?action=${a}`);
@@ -209,7 +218,7 @@ const signupOf = (r) => new URL(loc(r), 'http://p').searchParams.get('signin') =
 const phoneFor = (n) => `05${String(stamp + n).slice(-8)}`;
 const details = (n, extra = {}) => ({
   firstName: 'גיל', lastName: 'גוגל', phoneNumber: phoneFor(n), citySymbol: 9000, gender: 'male',
-  dateOfBirth: '1992-03-04T00:00:00.000Z', skills: [], ...extra,
+  dateOfBirth: '1992-03-04T00:00:00.000Z', skills: [], consent: true, ...extra,
 });
 await check('SSO: a new identity gets the sign-up form (prefilled from Google); nothing is created yet', async () => {
   const c = jar();
@@ -272,7 +281,7 @@ await check('SSO: an account an earlier SSO sign-in created without a phone is a
   assert.equal((await c.req('GET', '/api/auth/session')).json.data.profileIncomplete, true);
   const me = await c.req('GET', '/api/users/me');
   assert.equal(me.json.data.profileIncomplete, true);
-  assert.equal(me.json.data.ssoLinked, true); assert.equal(me.json.data.hasPassword, false);
+  assert.equal(me.json.data.ssoLinked, true); assert.equal('hasPassword' in me.json.data, false);
   const done = await c.req('PATCH', '/api/users/me', details(3, { firstName: 'Bara', lastName: 'Complete' }));
   assert.equal(done.status, 200, done.text);
   assert.equal(done.json.data.profileIncomplete, false);
@@ -283,31 +292,60 @@ await check('SSO: the same identity signs into the same account again (by subjec
   assert.ok(signedInOk(await xhostdSignIn(c, `changed-${gEmail}`, { sub: `g-${stamp}` })));
   assert.equal(String((await c.req('GET', '/api/auth/session')).json.data.user._id), gId);
 });
-await check('SSO: the email of an existing password candidate links to that account; the password still works', async () => {
+await check('SSO: the email of an existing candidate links to it; a leftover password is cleared, old sessions end, notice shown', async () => {
+  const old = jar();
+  assert.equal((await candidateLogin(old, candEmail)).status, 200);
+  // A hash left from before 11.2026 (the migration clears them; this proves the SSO link clears one too).
+  await db.query(`UPDATE users SET password = '$2a$10$legacylegacylegacylegacyleg' WHERE id = $1`, [String(candId)]);
   const c = jar();
-  assert.ok(signedInOk(await xhostdSignIn(c, candEmail.toUpperCase(), { sub: `g-link-${stamp}` })));
+  const r = await xhostdSignIn(c, candEmail.toUpperCase(), { sub: `g-link-${stamp}` });
+  assert.ok(signedInOk(r));
+  assert.match(loc(r), /[?&]notice=password_cleared\b/, 'no on-screen notice');
   assert.equal(String((await c.req('GET', '/api/auth/session')).json.data.user._id), String(candId));
-  assert.equal((await jar().req('POST', '/api/login', { email: candEmail, password: 'secret-pass-1' })).status, 200);
+  assert.equal((await db.query('SELECT password FROM users WHERE id = $1', [String(candId)])).rows[0].password, '');
+  assert.notEqual((await old.req('GET', '/api/users/me')).status, 200, 'the earlier session still works');
+  assert.equal((await c.req('GET', '/api/users/me')).status, 200, 'the new Google session does not work');
+  const logged = await db.query(`SELECT 1 FROM audit_log WHERE action = 'auth.sso_password_cleared' AND actor = $1`, [`user:${candId}`]);
+  assert.equal(logged.rowCount, 1);
+  // ... and the code by email still signs the same account in.
+  const byCode = jar();
+  assert.equal(String((await candidateLogin(byCode, candEmail)).json.data.user._id), String(candId));
 });
 await check('SSO: an account already linked to another Google identity is not taken over', async () => {
   const r = await xhostdSignIn(jar(), candEmail, { sub: `g-other-${stamp}` });
   assert.equal(signInError(r), 'link_conflict');
 });
-await check('SSO: a candidate made staff signs in as staff with SSO; never with the password', async () => {
-  const pw = jar();
-  assert.equal((await pw.req('POST', '/api/login', { email: candEmail, password: 'secret-pass-1' })).status, 200);
+// Several roles per account (owner, 23.11.2026): the staff role is ADDED; the candidate role and data stay.
+await check('staff screen: a candidate\'s account gets the staff role added and stays a candidate; removing it keeps the candidate', async () => {
   const add = await admin.req('POST', '/api/admin/staff', { email: candEmail, role: 'content_manager' });
   assert.equal(add.status, 200, add.text);
-  // the role change closed the old sessions; the password no longer signs this account in
-  assert.notEqual((await pw.req('GET', '/api/users')).status, 200, 'the old password session got staff access');
-  assert.equal((await jar().req('POST', '/api/login', { email: candEmail, password: 'secret-pass-1' })).status, 403);
-  // the same Google identity (linked earlier, as a candidate) now signs in as the content manager
-  const sso = jar();
-  assert.ok(signedInOk(await xhostdSignIn(sso, candEmail, { sub: `g-link-${stamp}` })));
-  assert.equal((await sso.req('GET', '/api/users')).status, 200, 'SSO after the promotion did not get the role');
-  const back = await admin.req('PATCH', `/api/admin/staff/${candId}/role`, { role: 'user' });
-  assert.equal(back.status, 200, back.text);
-  assert.notEqual((await sso.req('GET', '/api/users')).status, 200, 'demotion not effective');
+  let row = (await db.query(`SELECT role, roles FROM users WHERE id = $1`, [String(candId)])).rows[0];
+  assert.deepEqual([...row.roles].sort(), ['content_manager', 'user']);
+  assert.equal(row.role, 'content_manager', 'role = the highest of roles');
+  assert.equal((await admin.req('PATCH', `/api/admin/staff/${candId}/role`, { role: 'user' })).status, 200);
+  row = (await db.query(`SELECT role, roles FROM users WHERE id = $1`, [String(candId)])).rows[0];
+  assert.deepEqual(row.roles, ['user']);
+  assert.equal(row.role, 'user');
+});
+await check('code requests: the same answer for every address; no typed email in the log', async () => {
+  const typed = `nobody-typed-${stamp}@example.test`;
+  const answers = [];
+  // A new address, a candidate (no code asked for it yet), staff (the content manager: the admin asked a minute ago).
+  for (const email of [typed, gEmail, CM_EMAIL]) {
+    const r = await jar().req('POST', '/api/auth/email/request', { email });
+    answers.push(`${r.status} ${JSON.stringify(r.json)}`);
+  }
+  assert.equal(new Set(answers).size, 1, answers.join(' | '));
+  await jar().req('POST', '/api/auth/email/verify', { email: typed, code: '123456' });
+  await new Promise((res) => setTimeout(res, 300)); // the log writes are fire-and-forget
+  const rows = await db.query(
+    `SELECT action, target, details FROM audit_log WHERE action LIKE 'auth.email_code_%' AND at > now() - interval '2 minutes'`);
+  assert.ok(rows.rowCount >= 4, `only ${rows.rowCount} entries`);
+  const text = JSON.stringify(rows.rows);
+  assert.ok(!text.includes(typed) && !text.includes(gEmail.toLowerCase()) && !text.includes(ADMIN_EMAIL) && !text.includes(CM_EMAIL), 'a typed email is in the log');
+  assert.ok(rows.rows.some((r) => r.target === `user:${gId}`), 'a known account is logged as user:<id>');
+  assert.ok(rows.rows.some((r) => /^email#[0-9a-f]{12}$/.test(r.target ?? '')), 'an unknown address is logged as a hash');
+  assert.ok(!/\b\d{6}\b/.test(JSON.stringify(rows.rows.map((r) => r.details))), 'a code-like number is in the log details');
 });
 await check('SSO: a missing identity cookie is refused (no_sso_session)', async () => {
   const c = jar();
@@ -377,8 +415,10 @@ await check('cross-site: the callback passes as a top-level navigation; the rest
   assert.equal(cb.status, 302);
   const cbFetch = await jar().req('GET', '/api/auth/xhostd/callback?state=x', undefined, { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'cors' });
   assert.equal(cbFetch.status, 403);
-  const login = await jar().req('POST', '/api/login', { email: candEmail, password: 'secret-pass-1' }, { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' });
-  assert.equal(login.status, 403);
+  for (const p of ['/api/auth/email/request', '/api/auth/email/verify']) {
+    const r = await jar().req('POST', p, { email: candEmail, code: '123456' }, { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' });
+    assert.equal(r.status, 403, p);
+  }
   const start = await jar().req('GET', '/api/auth/xhostd/start', undefined, { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' });
   assert.equal(start.status, 403, 'another site may not start a sign-in in the visitor\'s browser');
 });

@@ -1,10 +1,10 @@
 /* ============================================================================
- *  Internal API tokens — staff screen (routes are staffOnly: admin + content manager, see routes.ts):
+ *  Internal API tokens — the admin security screen (routes are adminOnly, see routes.ts; owner, 20.11.2026):
  *   GET  /api/admin/api-tokens              all tokens' metadata (never the token or its hash)
  *   POST /api/admin/api-tokens              { name, scopes[], expiresInDays? } → the token, ONCE.
- *                                           People scopes (PEOPLE_SCOPES) only for a content manager (DB
- *                                           role); an admin asking for one gets 403, logged as access.denied.
- *   POST /api/admin/api-tokens/:id/revoke   any staff member, any token; effective on the next request
+ *                                           Only an admin (DB role) may issue any scope; anyone else gets
+ *                                           403 (access.denied).
+ *   POST /api/admin/api-tokens/:id/revoke   any admin, any token; effective on the next request
  *  Both writes are logged (api_token.created / api_token.revoked).
  * ========================================================================== */
 import { NextFunction, Request, Response } from 'express';
@@ -59,9 +59,9 @@ export const createToken = async (req: Request, res: Response, next: NextFunctio
     const { token, prefix, hash } = mintToken();
     const by = actorOf(req);
     const row = await queryOne(
-      `INSERT INTO api_tokens (id, name, prefix, token_hash, scopes, created_by, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(days => $7)) RETURNING *`,
-      [newObjectId(), name, prefix, hash, scopes, by, days]
+      `INSERT INTO api_tokens (id, name, prefix, token_hash, scopes, created_by, created_by_user_id, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now() + make_interval(days => $8)) RETURNING *`,
+      [newObjectId(), name, prefix, hash, scopes, by, req.authUser!.id, days]
     );
     await writeAudit(by, 'api_token.created', tokenActor(prefix), { name, scopes, days, expires_at: row.expires_at });
     res.setHeader('Cache-Control', 'private, no-store');
@@ -77,7 +77,20 @@ export const revokeToken = async (req: Request, res: Response, next: NextFunctio
     const row = await queryOne(
       `UPDATE api_tokens SET revoked_at = now(), revoked_by = $1 WHERE id = $2 AND revoked_at IS NULL RETURNING *`, [by, id]);
     if (!row) return bad(res, 'token not found or already revoked', 404);
-    await writeAudit(by, 'api_token.revoked', tokenActor(row.prefix), { name: row.name });
+    await writeAudit(by, 'api_token.revoked', tokenActor(row.prefix), { name: row.name, reason: 'manual' });
     res.json({ data: toView(row) });
   } catch (e) { next(e); }
+};
+
+/**
+ * Revokes every live token a person issued (staff screen: deactivate, role change, revoke sessions). Each one is
+ * logged as api_token.revoked with the reason. The gate also refuses such tokens on use (issuerRefusal), so this
+ * is belt and braces that also shows the state on the tokens screen.
+ */
+export const revokeTokensOf = async (userId: string, by: string, reason: 'issuer_deactivated' | 'issuer_role_changed' | 'issuer_sessions_revoked') => {
+  const rows = await query<{ prefix: string; name: string }>(
+    `UPDATE api_tokens SET revoked_at = now(), revoked_by = $1 WHERE created_by_user_id = $2 AND revoked_at IS NULL RETURNING prefix, name`,
+    [by, userId]);
+  for (const r of rows) await writeAudit(by, 'api_token.revoked', tokenActor(r.prefix), { name: r.name, reason });
+  return rows.length;
 };

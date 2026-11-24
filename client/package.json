@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build --outDir dist",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "snapshot:privacy": "node ../server/node_modules/tsx/dist/cli.mjs --tsconfig scripts/tsconfig.snapshot.json scripts/snapshot-privacy.tsx"
   },
   "dependencies": {
     "@emotion/react": "^11.13.3",

@@ -1,3 +1,4 @@
+import type { SalesforceSettings } from '../../config/salesforceSettings.js';
 export interface Config {
     port: number;
     dbURL: string;
@@ -23,16 +24,5 @@ export interface Config {
         smooveGuestListId : string,
         smooveApiUrl : string,
     },
-    salesforce: {
-        enableSalesforce: boolean,
-        clientId: string,
-        clientSecret: string,
-        loginUrl: string,
-        apiVersion: string,
-        contactsAccountId: string;
-        jobCaseAccountId: string,
-        jobCaseRecordTypeId: string,
-        jobApplicationsCaseAccountId: string,
-        jobApplicationsCaseRecordTypeId: string,
-    }
+    salesforce: SalesforceSettings & { enableSalesforce: boolean }
 }

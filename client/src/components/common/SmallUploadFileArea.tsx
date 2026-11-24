@@ -18,11 +18,13 @@ interface UploadFileAreaProps extends React.InputHTMLAttributes<HTMLInputElement
   fileConfirm?: boolean;
   onFilePathChange?: (value: string) => void;
   /** For analytics: the outcome of an upload attempt (file type and size only, never the name). */
+  /** For analytics: an upload began (the file passed the checks and is being sent). */
+  onUploadStart?: () => void;
   onUploadResult?: (r: { ok: true; fileType: 'pdf' | 'docx' | 'other'; sizeKb: number } | { ok: false; code: string }) => void;
 }
 
 const SmallUploadFileArea = forwardRef<HTMLInputElement, UploadFileAreaProps>(
-  ({ label, placeholder, className = "", error, iconColor, fileInside, onFilePathChange, onUploadResult, ...props }, ref) => {
+  ({ label, placeholder, className = "", error, iconColor, fileInside, onFilePathChange, onUploadStart, onUploadResult, ...props }, ref) => {
     const [file, setFile] = useState<File | null>(null);
     const [dragging, setDragging] = useState(false);
     const fileInputRef = useRef<HTMLInputElement | null>(null); // Ref to file input
@@ -82,6 +84,7 @@ const SmallUploadFileArea = forwardRef<HTMLInputElement, UploadFileAreaProps>(
 
     const uploadFile = async () => {
       if (file !== null) {
+        onUploadStart?.()
         const token = generateToken();
         const formData = new FormData();
         formData.append("file", file);

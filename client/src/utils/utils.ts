@@ -24,12 +24,6 @@ export const formatDate = (ms: number): string => {
   }); // Customize format if needed
 };
 
-export const stripHtmlTags = (html: string): string => {
-  const div = document.createElement('div');
-  div.innerHTML = html;
-  return div.textContent || div.innerText || '';
-};
-
 // Utility function to compare two arrays of options
 export const arraysAreEqual = (arr1: Option[], arr2: Option[]): boolean => {
   if (arr1.length !== arr2.length) return false;

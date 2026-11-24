@@ -4,13 +4,14 @@
 // Staff sign in only with "Continue with Google" (xhostd SSO): start the server with the mock values in helpers/staffLogin.mjs.
 // Covers: limit race (N parallel at one slot left → exactly one passes), strict hand-over when the log fails,
 // append-only trigger, role read from the DB, revoked refresh token, staff revoke, cross-site refusal, page cap,
-// separation of duties (the admin sees no candidates; budgets and grants are the content managers'), revoke sessions
+// roles (an admin sees candidates too, counted and logged like a content manager; only admins grant), revoke sessions
 // and deactivation take effect at once, no lock-out race between two admins, and the one-time role split migration.
 import assert from 'node:assert/strict';
 import { staffLogin, xhostdSignIn, signedInOk } from './helpers/staffLogin.mjs';
 import crypto from 'node:crypto';
 import pg from 'pg';
 import { PDFDocument } from 'pdf-lib';
+import { signUp, candidateLogin } from './helpers/candidate.mjs';
 
 const BASE = process.env.BASE || 'http://localhost:3100';
 if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(BASE)) throw new Error('local servers only');
@@ -47,10 +48,11 @@ const check = async (name, fn) => {
 };
 const pdf = async () => { const d = await PDFDocument.create(); d.addPage().drawText('CV'); return Buffer.from(await d.save()); };
 const stamp = Date.now();
-/** With a password: the password form. Without: "Continue with Google" (xhostd SSO, mock) — the only way for staff. */
-const login = async (email, password) => {
+/** `byCode`: a sign-in code by email (candidates; dev endpoint for the code). Else "Continue with Google"
+ *  (xhostd SSO, mock) — the only way for staff. */
+const login = async (email, byCode = false) => {
   const j = jar();
-  const r = password ? await j.req('POST', '/api/login', { email, password }) : await staffLogin(j, email);
+  const r = byCode ? await candidateLogin(j, email) : await staffLogin(j, email);
   assert.equal(r.status, 200, `login ${email}: ${r.buf}`);
   return j;
 };
@@ -64,9 +66,9 @@ const token = crypto.randomUUID();
 const fd = new FormData(); fd.append('file', new Blob([await pdf()], { type: 'application/pdf' }), 'cv.pdf');
 assert.equal((await cand.req('POST', `/api/files/${token}`, fd, { form: true })).status, 200, 'upload');
 const candEmail = `live-${stamp}@example.test`;
-const signup = await cand.req('POST', '/api/users', {
-  firstName: 'Live', lastName: 'Test', email: candEmail, phoneNumber: `05${String(stamp).slice(-8)}`, password: 'secret-pass-1',
-  citySymbol: 3000, gender: 'other', cvFileUrl: `${token}/cv.pdf`,
+const signup = await signUp(cand, {
+  firstName: 'Live', lastName: 'Test', email: candEmail, phoneNumber: `05${String(stamp).slice(-8)}`,
+  citySymbol: 3000, gender: 'other', dateOfBirth: '1990-01-01T00:00:00.000Z', cvFileUrl: `${token}/cv.pdf`, consent: true,
 });
 assert.equal(signup.status, 200, `signup ${signup.buf}`);
 const candId = signup.json.data._id;
@@ -78,7 +80,7 @@ const cvsAllowed = async () => {
 };
 
 await check('login answer carries no tokens in the body', async () => {
-  const r = await jar().req('POST', '/api/login', { email: candEmail, password: 'secret-pass-1' });
+  const r = await candidateLogin(jar(), candEmail);
   assert.equal(r.status, 200);
   assert.equal(r.json.data.accessToken, undefined);
   assert.equal(r.json.data.refreshToken, undefined);
@@ -103,14 +105,20 @@ await check('CV open: sandboxed response headers, and "who saw" finds it by emai
   assert.ok(log.some((e) => e.action === 'candidate.cv_opened' && e.actor === CM_EMAIL));
 });
 
-await check('the admin gets no candidate data: no list, no CV, no applications (each try signs them out)', async () => {
-  for (const p of ['/api/users', `/api/files/${candId}`, `/api/users/job-applications/${candId}`, '/api/admin/jobs/with-comments']) {
-    const a = await login(ADMIN_EMAIL);
-    const r = await a.req('GET', p);
-    assert.notEqual(r.status, 200, `${p} answered 200 to the admin`);
-    assert.ok(!r.buf.toString().includes(candEmail) && !r.buf.subarray(0, 4).toString().startsWith('%PDF'), `${p} leaked data`);
+await check('the admin sees candidates too: list, CV, applications — inside the daily limits and strictly logged as the admin', async () => {
+  const list = await sec.req('GET', '/api/users?usersFilter[page]=1');
+  assert.equal(list.status, 200, String(list.buf));
+  const cv = await sec.req('GET', `/api/files/${candId}`);
+  assert.equal(cv.status, 200);
+  assert.ok(cv.buf.subarray(0, 4).toString().startsWith('%PDF'));
+  assert.equal((await sec.req('GET', `/api/users/job-applications/${candId}`)).status, 200);
+  const log = (await sec.req('GET', `/api/admin/audit?subject=${candId}&actor=${encodeURIComponent(ADMIN_EMAIL)}`)).json.data.entries;
+  for (const a of ['candidates.shown', 'candidate.cv_opened', 'candidate.applications_viewed']) {
+    assert.ok(log.some((e) => e.action === a && e.actor === ADMIN_EMAIL), `${a} by the admin not logged`);
   }
-  sec = await login(ADMIN_EMAIL);
+  const s = (await sec.req('GET', '/api/admin/security')).json.data;
+  const u = s.usage.find((x) => x.actor === ADMIN_EMAIL);
+  assert.ok(u && u.cvs.used >= 1 && u.people.used >= 1, 'the admin is not counted in the daily limits');
 });
 
 await check('a content manager gets no security screen, log or staff users', async () => {
@@ -143,8 +151,8 @@ await check('limit race: 6 parallel CV opens with one slot left → exactly one 
   assert.match(rs.find((r) => r.status === 429).json.message, /מגבלה היומית/);
   const { summary } = await cvsAllowed();
   assert.ok(summary.alerts.some((a) => a.kind === 'cvs_limit' && a.user_email === CM_EMAIL), 'no cvs_limit alert');
-  // budgets are the content managers': a grant to the admin is refused
-  assert.equal((await sec.req('POST', '/api/admin/security/grant', { email: ADMIN_EMAIL, budget: 'cvs' })).status, 404);
+  // budgets are for staff who see candidates (content managers and admins); a candidate gets no grant
+  assert.equal((await sec.req('POST', '/api/admin/security/grant', { email: candEmail, budget: 'cvs' })).status, 404);
   const g = await sec.req('POST', '/api/admin/security/grant', { email: CM_EMAIL, budget: 'cvs' });
   assert.equal(g.status, 200, String(g.buf));
   assert.equal((await cm.req('GET', `/api/files/${candId}`)).status, 200);
@@ -178,10 +186,10 @@ await check('the activity log is append-only (UPDATE, DELETE of recent rows, TRU
 
 await check('role is read from the DB on every request (promote → in, demote → out; each role only its own area)', async () => {
   assert.notEqual((await cand.req('GET', '/api/users')).status, 200);
-  // A PASSWORD session gets no staff access when its account becomes staff (staff = xhostd SSO only) ...
-  const cp = await login(candEmail, 'secret-pass-1');
+  // A CODE-BY-EMAIL session gets no staff access when its account becomes staff (staff = xhostd SSO only) ...
+  const cp = await login(candEmail, true);
   await setRole(candId, 'admin');
-  assert.notEqual((await cp.req('GET', '/api/admin/security')).status, 200, 'a password session got staff access');
+  assert.notEqual((await cp.req('GET', '/api/admin/security')).status, 200, 'an email-code session got staff access');
   await setRole(candId, 'user');
   // ... an SSO session does (role from the DB on every request).
   const c2 = await login(candEmail);
@@ -227,8 +235,8 @@ await check('deactivate: no login, live session out at once; reactivate restores
   assert.equal((await sec.req('POST', `/api/admin/staff/${candId}/deactivate`)).status, 200);
   assert.notEqual((await c7.req('GET', '/api/users')).status, 200, 'deactivated session still works');
   assert.ok(!signedInOk(await xhostdSignIn(jar(), candEmail)), 'a deactivated account signed in (SSO)');
-  const r = await jar().req('POST', '/api/login', { email: candEmail, password: 'secret-pass-1' });
-  assert.notEqual(r.status, 200, 'a deactivated account signed in (password)');
+  const r = await candidateLogin(jar(), candEmail);
+  assert.notEqual(r.status, 200, 'a deactivated account signed in (code by email)');
   assert.equal((await sec.req('POST', `/api/admin/staff/${candId}/activate`)).status, 200);
   assert.equal((await (await login(candEmail)).req('GET', '/api/users')).status, 200);
   assert.equal((await sec.req('POST', `/api/admin/staff/${await idOf(ADMIN_EMAIL)}/deactivate`)).status, 409);
@@ -255,11 +263,14 @@ await check('lock-out: the last admin cannot be demoted; two admins demoting eac
   sec = await login(ADMIN_EMAIL);
 });
 
-await check('staff add: an existing account gets the role by email; a new one is created without a password', async () => {
+await check('staff add: a candidate\'s account gets the staff role ADDED (stays a candidate); a new one is created without a password', async () => {
+  // Several roles per account (owner, 23.11.2026).
   const add = await sec.req('POST', '/api/admin/staff', { email: candEmail, role: 'content_manager' });
   assert.equal(add.status, 200, String(add.buf));
-  assert.equal(add.json.data.created, false);
-  assert.equal((await db.query(`SELECT role FROM users WHERE id = $1`, [candId])).rows[0].role, 'content_manager');
+  assert.ok(!String(add.buf).includes(candEmail));
+  assert.deepEqual([...(await db.query(`SELECT roles FROM users WHERE id = $1`, [candId])).rows[0].roles].sort(), ['content_manager', 'user']);
+  assert.equal((await sec.req('PATCH', `/api/admin/staff/${candId}/role`, { role: 'user' })).status, 200);
+  assert.deepEqual((await db.query(`SELECT roles FROM users WHERE id = $1`, [candId])).rows[0].roles, ['user']);
   const newEmail = `staff-${stamp}@example.test`;
   const inv = await sec.req('POST', '/api/admin/staff', { email: newEmail, role: 'admin', firstName: 'New' });
   assert.equal(inv.status, 200, String(inv.buf));
@@ -284,7 +295,7 @@ await check('content managers cannot edit a staff account from the candidates sc
 });
 
 await check('a refresh token is dead after logout (also on routes that identify optionally)', async () => {
-  const c4 = await login(candEmail, 'secret-pass-1');
+  const c4 = await login(candEmail);
   const refreshOnly = [...c4.cookies].filter(([k]) => /refresh/i.test(k));
   assert.equal(refreshOnly.length, 1, 'no refresh cookie');
   await c4.req('POST', '/api/logout');

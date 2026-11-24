@@ -45,6 +45,15 @@ export class UploadFileService {
         return response;
     }
 
+    /** Staff: the CV sent with one application (also one for that job only), through the server's CV hand-over. */
+    async fetchApplicationCv(userId: string, jobId: string): Promise<AxiosResponse<Blob> | string> {
+        return GlobalApiService.generalRequest(RequestEnum.Get,
+            `admin/users/${encodeURIComponent(userId)}/applications/${encodeURIComponent(jobId)}/cv`, {}, {}, {
+            responseType: 'blob',
+            returnWholeResponse: true,
+        });
+    }
+
     /** Name and upload date of the signed-in candidate's own profile CV. */
     async fetchMyCvInfo(): Promise<MyCvResponse | string> {
         return GlobalApiService.generalRequest(RequestEnum.Get, Routes.MY_CV, {});

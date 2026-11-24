@@ -10,6 +10,7 @@
 import { JobScope } from '../models/enums.js';
 import { isObjectId } from '../utils/ids.js';
 import { sanitizeJobHtml } from '../utils/sanitize.js';
+import { checkThresholdCondition, THRESHOLD_CONDITION_LIMITS } from '../models/schemas/thresholdCondition.js';
 
 /** Field caps. Title / company match the admin job form (the job card is sized for them). */
 export const SUBMISSION_FIELD_LIMITS = {
@@ -23,12 +24,14 @@ export const SUBMISSION_FIELD_LIMITS = {
   contactPhoneDigits: { min: 9, max: 15 },
   requiredSkills: { min: 1, max: 15 },
   rejectReason: { max: 500 },
+  /** תנאי סף (optional; models/schemas/thresholdCondition.ts). */
+  thresholdCondition: THRESHOLD_CONDITION_LIMITS,
 } as const;
 
 /** Fields an employer sends (and staff may edit while the submission is pending). */
 export const SUBMISSION_FIELDS = [
   'title', 'companyName', 'citySymbol', 'jobScope', 'requiredSkills', 'description', 'externalLink', 'publicEmail',
-  'contactName', 'contactEmail', 'contactPhone',
+  'contactName', 'contactEmail', 'contactPhone', 'thresholdCondition',
 ] as const;
 export type SubmissionField = typeof SUBMISSION_FIELDS[number];
 
@@ -44,10 +47,12 @@ export interface SubmissionInput {
   contactName: string;
   contactEmail: string;
   contactPhone: string;
+  /** תנאי סף: plain text the candidate confirms before applying; null = none. */
+  thresholdCondition: string | null;
 }
 
 /** Error codes per field (the client shows its own localized text for each code). */
-export type FieldErrors = Partial<Record<SubmissionField | 'consent', 'required' | 'too_short' | 'too_long' | 'invalid'>>;
+export type FieldErrors = Partial<Record<SubmissionField | 'consent' | 'marketingConsent', 'required' | 'too_short' | 'too_long' | 'invalid'>>;
 
 const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 // Control characters (except tab/newline) and bidi overrides that could disguise text in the review screen.
@@ -152,6 +157,12 @@ export const validateSubmission = (raw: any, opts: { partial?: boolean } = {}): 
     else if (s.length > L.externalLink.max) errors.externalLink = 'too_long';
     else if (!isHttpUrl(s)) errors.externalLink = 'invalid';
     else value.externalLink = s;
+  }
+
+  if (has('thresholdCondition')) {
+    const c = checkThresholdCondition(src.thresholdCondition === '' ? null : src.thresholdCondition);
+    if (c.ok) value.thresholdCondition = c.value;
+    else errors.thresholdCondition = c.error;
   }
 
   if (!opts.partial && src.consent !== true) errors.consent = 'required';

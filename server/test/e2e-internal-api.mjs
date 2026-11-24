@@ -7,6 +7,7 @@ import { staffLogin } from './helpers/staffLogin.mjs';
 import crypto from 'node:crypto';
 import pg from 'pg';
 import { PDFDocument } from 'pdf-lib';
+import { signUp as codeSignUp, candidateLogin } from './helpers/candidate.mjs';
 
 const BASE = process.env.BASE || 'http://localhost:3100';
 if (!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(BASE)) throw new Error('local servers only');
@@ -14,7 +15,7 @@ const SECRET = process.env.INTERNAL_API_SECRET || '';
 if (SECRET.length < 32) throw new Error('set INTERNAL_API_SECRET (the one the local server runs with, ≥ 32 chars)');
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@example.test';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'dev-admin-password-123';
-// The content manager (candidates' data) — only this role may issue people scopes (separation of duties).
+// The content manager and the admin may both issue people scopes; candidates may not hold tokens at all.
 const CM_EMAIL = process.env.CM_EMAIL || 'content@example.test';
 const CM_PASSWORD = process.env.CM_PASSWORD || 'dev-content-password-123';
 const db = new pg.Client({ connectionString: process.env.DATABASE_URL });
@@ -56,7 +57,7 @@ const check = async (name, fn) => {
   catch (e) { results.push(['FAIL', name, e.message]); }
 };
 
-const admin = jar(); // admin: security, no candidates
+const admin = jar(); // admin: security + everything a content manager does
 const cm = jar();    // content manager: jobs and candidates
 const stamp = Date.now();
 // Staff sign in only with "Continue with Google" (xhostd SSO; a mock here, see helpers/staffLogin.mjs).
@@ -64,9 +65,8 @@ assert.equal((await staffLogin(admin, ADMIN_EMAIL)).status, 200, 'admin login');
 assert.equal((await staffLogin(cm, CM_EMAIL)).status, 200, 'content manager login');
 
 const mint = async (name, scopes, expiresInDays) => {
-  // People scopes need the content manager; everything else is issued by the admin.
-  const who = scopes.some((s) => ['candidates:read', 'applications:read', 'cvs:read'].includes(s)) ? cm : admin;
-  const r = await who.req('POST', '/api/admin/api-tokens', { name: `${name} ${stamp}`, scopes, expiresInDays });
+  // Only an admin issues keys (owner, 20.11.2026).
+  const r = await admin.req('POST', '/api/admin/api-tokens', { name: `${name} ${stamp}`, scopes, expiresInDays });
   assert.equal(r.status, 201, r.text);
   return r.json.data;
 };
@@ -78,10 +78,10 @@ const fd = new FormData();
 fd.append('file', new Blob([await pdf()], { type: 'application/pdf' }), 'cv_internal.pdf');
 assert.equal((await jar().req('POST', `/api/files/${upTok}`, fd, { form: true })).status, 200, 'upload');
 const cand = jar();
-const signUp = await cand.req('POST', '/api/users', {
+const signUp = await codeSignUp(cand, {
   firstName: 'Internal', lastName: 'Api', email: `e2e-int-${stamp}@example.test`, phoneNumber: `05${String(stamp).slice(-8)}`,
-  dateOfBirth: '1990-01-01T00:00:00.000Z', gender: 'other', citySymbol: 9000, password: 'secret-pass-1',
-  skills: [], cvFileUrl: `${upTok}/cv_internal.pdf`, hasAppliedToJob: false,
+  dateOfBirth: '1990-01-01T00:00:00.000Z', gender: 'other', citySymbol: 9000,
+  skills: [], cvFileUrl: `${upTok}/cv_internal.pdf`, hasAppliedToJob: false, consent: true,
 });
 assert.equal(signUp.status, 200, signUp.text);
 const candidateId = signUp.json.data._id;
@@ -94,7 +94,7 @@ await check('token management is staff-only (anonymous and candidates refused)',
   assert.notEqual((await jar().req('GET', '/api/admin/api-tokens')).status, 200);
   // Its own session: a candidate trying an admin route is signed out (by design).
   const other = jar();
-  assert.equal((await other.req('POST', '/api/login', { email: `e2e-int-${stamp}@example.test`, password: 'secret-pass-1' })).status, 200);
+  assert.equal((await candidateLogin(other, `e2e-int-${stamp}@example.test`)).status, 200);
   assert.notEqual((await other.req('POST', '/api/admin/api-tokens', { name: 'x', scopes: ['jobs:read'] })).status, 201);
 });
 
@@ -113,30 +113,23 @@ await check('creating a token: bad scopes / expiry over 90 days refused; the tok
   assert.equal(logged.rowCount, 1);
 });
 
-await check('an admin cannot issue a people scope (403, logged); a content manager can; the admin may issue jobs / salesforce:push', async () => {
-  for (const scopes of [['candidates:read'], ['applications:read'], ['jobs:read', 'cvs:read']]) {
-    const r = await admin.req('POST', '/api/admin/api-tokens', { name: `admin people ${stamp}`, scopes });
-    assert.equal(r.status, 403, `${scopes}: ${r.text}`); assert.equal(r.json.code, 'scope_not_issuable');
-  }
-  const none = await db.query(`SELECT 1 FROM api_tokens WHERE name = $1`, [`admin people ${stamp}`]);
-  assert.equal(none.rowCount, 0);
-  const logged = await db.query(`SELECT details FROM audit_log WHERE action = 'access.denied' AND actor = $1 AND at > now() - interval '5 minutes'`, [ADMIN_EMAIL]);
-  assert.ok(logged.rows.some((x) => String(x.details?.reason).startsWith('api_token:scope_not_issuable')), JSON.stringify(logged.rows));
-  // The screen offers each role only what it may issue.
-  assert.deepEqual((await admin.req('GET', '/api/admin/api-tokens')).json.data.issuable, ['jobs:read', 'jobs:write', 'salesforce:push']);
-  assert.equal((await cm.req('GET', '/api/admin/api-tokens')).json.data.issuable.length, 6);
-  const ok = await cm.req('POST', '/api/admin/api-tokens', { name: `cm people ${stamp}`, scopes: ['candidates:read', 'cvs:read'] });
-  assert.equal(ok.status, 201, ok.text);
+await check('only the admin issues keys (people scopes too, logged as the issuer); a content manager is refused', async () => {
+  const p = await admin.req('POST', '/api/admin/api-tokens', { name: `admin people ${stamp}`, scopes: ['candidates:read', 'cvs:read'] });
+  assert.equal(p.status, 201, p.text);
+  const created = await db.query(`SELECT 1 FROM audit_log WHERE action = 'api_token.created' AND actor = $1 AND target = $2`, [ADMIN_EMAIL, `token:${p.json.data.prefix}`]);
+  assert.equal(created.rowCount, 1, 'admin people-scope token not logged as the admin');
+  assert.equal((await admin.req('POST', `/api/admin/api-tokens/${p.json.data.id}/revoke`, {})).status, 200);
+  // The admin is offered every scope (a content manager's refusal is checked at the end: it signs them out).
+  assert.equal((await admin.req('GET', '/api/admin/api-tokens')).json.data.issuable.length, 6);
   assert.equal((await admin.req('POST', '/api/admin/api-tokens', { name: `admin sf ${stamp}`, scopes: ['jobs:read', 'salesforce:push'] })).status, 201);
 });
 
-await check('both staff roles see every token; the admin can revoke a content manager token, effective at once', async () => {
-  const t = await mint('cm token to revoke', ['candidates:read']);
+await check('the admin sees every token and can revoke one, effective at once', async () => {
+  const t = await mint('token to revoke', ['candidates:read']);
   assert.equal((await api(t.token, 'GET', '/candidates?limit=1')).status, 200);
   const seenByAdmin = (await admin.req('GET', '/api/admin/api-tokens')).json.data.tokens.find((x) => x.prefix === t.prefix);
-  assert.ok(seenByAdmin, 'admin does not see the content manager token');
-  assert.equal(seenByAdmin.createdBy, CM_EMAIL);
-  assert.ok((await cm.req('GET', '/api/admin/api-tokens')).json.data.tokens.some((x) => x.prefix === t.prefix));
+  assert.ok(seenByAdmin, 'admin does not see the token');
+  assert.equal(seenByAdmin.createdBy, ADMIN_EMAIL);
   const r = await admin.req('POST', `/api/admin/api-tokens/${t.id}/revoke`, {});
   assert.equal(r.status, 200, r.text);
   assert.equal(r.json.data.revokedBy, ADMIN_EMAIL);
@@ -256,35 +249,121 @@ await check('applications: list / get with a CV link, never the storage key; CV 
   assert.equal(logged.rowCount, 1);
 });
 
-await check('CVs through a token hit the daily CV limit (40) → 429 and an alert', async () => {
+// A key's daily limits are its ISSUER's (all keys here are the admin's): what the admin already spent today
+// (screens or other keys) counts too.
+const cmUsed = async (actions) => (await db.query(
+  `SELECT COALESCE(SUM((details->>'count')::int), 0)::int AS n FROM audit_log
+    WHERE (actor = $1 OR details @> jsonb_build_object('budget_owner', $1::text))
+      AND at >= date_trunc('day', now() AT TIME ZONE 'Asia/Jerusalem') AT TIME ZONE 'Asia/Jerusalem' AND action = ANY($2) AND details ? 'count'`,
+  [ADMIN_EMAIL, actions])).rows[0].n;
+
+await check('CVs through a key count against its issuer: the 40/day limit → 429, alerts on the issuer', async () => {
   const t = await mint('cv limit', ['applications:read', 'cvs:read']);
+  const before = await cmUsed(['candidate.cv_opened']);
   let ok = 0; let last;
   for (let i = 0; i < 41; i++) {
     last = await api(t.token, 'GET', `/applications/${applicationId}/cv`);
     if (last.status === 200) ok++; else break;
   }
-  assert.equal(ok, 40);
+  assert.equal(before + ok, 40, `before ${before} + ok ${ok}`);
   assert.equal(last.status, 429); assert.equal(last.json.code, 'limit_cvs');
-  const alerts = await db.query(`SELECT kind FROM security_alerts WHERE user_email = $1`, [`token:${t.prefix}`]);
-  assert.deepEqual(alerts.rows.map((r) => r.kind).sort(), ['cvs_limit', 'cvs_many']);
+  const alerts = await db.query(`SELECT kind FROM security_alerts WHERE user_email = $1`, [ADMIN_EMAIL]);
+  assert.ok(['cvs_limit', 'cvs_many'].every((k) => alerts.rows.some((r) => r.kind === k)), JSON.stringify(alerts.rows));
+  const perKey = await db.query(`SELECT 1 FROM security_alerts WHERE user_email = $1`, [`token:${t.prefix}`]);
+  assert.equal(perKey.rowCount, 0, 'alerts are no longer per key');
+  // The entries name the key as actor and the issuer as budget owner.
+  const e = await db.query(`SELECT details FROM audit_log WHERE action = 'candidate.cv_opened' AND actor = $1 ORDER BY id DESC LIMIT 1`, [`token:${t.prefix}`]);
+  assert.equal(e.rows[0].details.budget_owner, ADMIN_EMAIL);
 });
 
-await check('candidates through a token hit the daily people limit (1,500) → 429', async () => {
+await check('the budget is counted on the issuer: a NEW key of the same person is refused at once, so is their screen', async () => {
+  const t2 = await mint('cv limit second key', ['applications:read', 'cvs:read']);
+  const r = await api(t2.token, 'GET', `/applications/${applicationId}/cv`);
+  assert.equal(r.status, 429, 'a second key started with a fresh allowance');
+  assert.equal((await admin.req('GET', `/api/files/${candidateId}`)).status, 429, 'the issuer\'s own screen is not on the same budget');
+});
+
+await check('candidates through a key hit the issuer\'s daily people limit (1,500) → 429', async () => {
   const t1 = await mint('people ok', ['candidates:read']);
-  const ok = await api(t1.token, 'GET', '/candidates?limit=5');
+  const ok = await api(t1.token, 'GET', '/candidates?limit=5&search=Internal');
   assert.equal(ok.status, 200, ok.buf.toString());
   assert.ok(!/password|post-scan\//.test(ok.buf.toString()));
+  // 5b: that there was a search is logged, never the text.
+  const shown = await db.query(`SELECT details FROM audit_log WHERE action = 'candidates.shown' AND actor = $1 ORDER BY id DESC LIMIT 1`, [`token:${t1.prefix}`]);
+  assert.equal(shown.rows[0].details.filters.search, true);
+  assert.ok(!JSON.stringify(shown.rows[0].details).includes('Internal'));
   const t = await mint('people limit', ['candidates:read']);
-  // Spend today's whole budget with one log entry (the log is the counter), then ask for someone.
+  // The issuer spent the whole day on the screen (one log entry; the log is the counter), then a key asks.
   await db.query(`INSERT INTO audit_log (actor, action, target, details) VALUES ($1, 'candidates.shown', 'e2e', $2)`,
-    [`token:${t.prefix}`, JSON.stringify({ ids: [], count: 1500 })]);
-  const one = await api(t.token, 'GET', `/candidates/${candidateId}`);
+    [ADMIN_EMAIL, JSON.stringify({ ids: [], count: 1500 })]);
+  // Someone the issuer has not seen today (people already seen today do not count again).
+  const fresh = await codeSignUp(jar(), {
+    firstName: 'Fresh', lastName: 'Person', email: `e2e-fresh-${stamp}@example.test`, phoneNumber: `053${String(stamp + 7).slice(-7)}`,
+    dateOfBirth: '1990-01-01T00:00:00.000Z', gender: 'other', citySymbol: 9000,
+    skills: [], cvFileUrl: '', hasAppliedToJob: false, consent: true,
+  });
+  assert.equal(fresh.status, 200, fresh.text);
+  const one = await api(t.token, 'GET', `/candidates/${fresh.json.data._id}`);
   assert.equal(one.status, 429, one.buf.toString()); assert.equal(one.json.code, 'limit_people');
   const list = await api(t.token, 'GET', '/candidates?limit=5');
   assert.equal(list.status, 429);
-  const alerts = await db.query(`SELECT kind FROM security_alerts WHERE user_email = $1`, [`token:${t.prefix}`]);
+  const alerts = await db.query(`SELECT kind FROM security_alerts WHERE user_email = $1`, [ADMIN_EMAIL]);
   assert.ok(alerts.rows.some((r) => r.kind === 'people_limit'));
   assert.equal((await api(t.token, 'GET', '/applications?limit=1')).status, 403); // no applications:read on this token
+});
+
+// --- a key stands only while its issuer does ---
+const newStaff = async (label) => {
+  const email = `e2e-issuer-${label}-${stamp}@example.test`;
+  const add = await admin.req('POST', '/api/admin/staff', { email, role: 'admin' });
+  assert.equal(add.status, 200, add.text);
+  const j = jar();
+  assert.equal((await staffLogin(j, email)).status, 200, `${label} login`);
+  const id = (await db.query(`SELECT id FROM users WHERE lower(email) = $1`, [email])).rows[0].id;
+  const r = await j.req('POST', '/api/admin/api-tokens', { name: `issuer ${label} ${stamp}`, scopes: ['jobs:read', 'candidates:read'] });
+  assert.equal(r.status, 201, r.text);
+  return { email, id, key: r.json.data, client: j };
+};
+
+await check('a deactivated issuer\'s key is refused (401 token_issuer_inactive) and revoked, logged with the reason', async () => {
+  const s = await newStaff('deact');
+  const row = await db.query(`SELECT created_by_user_id FROM api_tokens WHERE prefix = $1`, [s.key.prefix]);
+  assert.equal(row.rows[0].created_by_user_id, s.id, 'the issuer id is stored');
+  assert.equal((await api(s.key.token, 'GET', '/jobs?limit=1')).status, 200);
+  assert.equal((await admin.req('POST', `/api/admin/staff/${s.id}/deactivate`)).status, 200);
+  const r = await api(s.key.token, 'GET', '/jobs?limit=1');
+  assert.equal(r.status, 401);
+  assert.ok(['token_revoked', 'token_issuer_inactive'].includes(r.json.code), r.json.code);
+  const revoked = await db.query(`SELECT details FROM audit_log WHERE action = 'api_token.revoked' AND target = $1`, [`token:${s.key.prefix}`]);
+  assert.equal(revoked.rows[0]?.details?.reason, 'issuer_deactivated');
+  // Even if the revocation were undone, the gate refuses on the issuer's state.
+  await db.query(`UPDATE api_tokens SET revoked_at = NULL WHERE prefix = $1`, [s.key.prefix]);
+  const again = await api(s.key.token, 'GET', '/jobs?limit=1');
+  assert.equal(again.status, 401); assert.equal(again.json.code, 'token_issuer_inactive');
+});
+
+await check('a key whose issuer\'s DB role no longer allows its scopes is refused (token_issuer_role); role change revokes', async () => {
+  const s = await newStaff('role');
+  assert.equal((await api(s.key.token, 'GET', '/jobs?limit=1')).status, 200);
+  // The role changes behind the staff screen's back: the gate still reads the DB role on every use.
+  await db.query(`UPDATE users SET role = 'user' WHERE id = $1`, [s.id]);
+  const r = await api(s.key.token, 'GET', '/jobs?limit=1');
+  assert.equal(r.status, 401); assert.equal(r.json.code, 'token_issuer_role');
+  await db.query(`UPDATE users SET role = 'admin' WHERE id = $1`, [s.id]);
+  // Through the staff screen: the keys are revoked too.
+  assert.equal((await admin.req('PATCH', `/api/admin/staff/${s.id}/role`, { role: 'content_manager' })).status, 200);
+  const after = await api(s.key.token, 'GET', '/jobs?limit=1');
+  assert.equal(after.status, 401); assert.equal(after.json.code, 'token_revoked');
+  const revoked = await db.query(`SELECT details FROM audit_log WHERE action = 'api_token.revoked' AND target = $1`, [`token:${s.key.prefix}`]);
+  assert.equal(revoked.rows[0]?.details?.reason, 'issuer_role_changed');
+});
+
+await check('revoke sessions also revokes the person\'s keys (reason issuer_sessions_revoked)', async () => {
+  const s = await newStaff('sess');
+  assert.equal((await admin.req('POST', `/api/admin/staff/${s.id}/revoke-sessions`)).status, 200);
+  assert.equal((await api(s.key.token, 'GET', '/jobs?limit=1')).status, 401);
+  const revoked = await db.query(`SELECT details FROM audit_log WHERE action = 'api_token.revoked' AND target = $1`, [`token:${s.key.prefix}`]);
+  assert.equal(revoked.rows[0]?.details?.reason, 'issuer_sessions_revoked');
 });
 
 // --- Salesforce ---
@@ -301,6 +380,15 @@ await check('Salesforce push refuses while ENABLE_SALESFORCE is off (409), nothi
   const pushed = await db.query(`SELECT 1 FROM audit_log WHERE action = 'salesforce.pushed' AND actor = $1`, [`token:${sf.prefix}`]);
   assert.equal(pushed.rowCount, 0);
   assert.equal((await api(reader.token, 'POST', '/salesforce/push-pending', {})).status, 403);
+});
+
+await check('a content manager has no key screen: list and create are refused, nothing is issued', async () => {
+  const before = (await db.query(`SELECT count(*)::int AS n FROM api_tokens`)).rows[0].n;
+  assert.notEqual((await cm.req('GET', '/api/admin/api-tokens')).status, 200);
+  const cm2 = jar();
+  assert.equal((await staffLogin(cm2, CM_EMAIL)).status, 200, 'content manager login again');
+  assert.notEqual((await cm2.req('POST', '/api/admin/api-tokens', { name: `cm people ${stamp}`, scopes: ['candidates:read', 'cvs:read'] })).status, 201);
+  assert.equal((await db.query(`SELECT count(*)::int AS n FROM api_tokens`)).rows[0].n, before);
 });
 
 // cleanup: the test job leaves the public list

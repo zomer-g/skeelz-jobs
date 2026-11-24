@@ -5,7 +5,7 @@ import UserDetails from './UserDetails';
 import UserSkills from './UserSkills';
 import { UserService } from '../../services/api/User.service';
 import { isString } from '../../utils/utils';
-import { applyContextParams, clearApplyContext, track } from '../../utils/analytics';
+import { applyContextParams, clearApplyContext, track, ssoSignUpMethod } from '../../utils/analytics';
 import { i18n } from '../../i18n/I18n';
 import {LeftArrowIcon } from '../../icons';
 import Button from '../common/Button';
@@ -13,24 +13,36 @@ import useToastStore from '../../store/Toast.store';
 import useAuthStore from '../../store/Auth.store';
 import { Spinner } from 'react-bootstrap';
 import { LoginService } from '../../services/api/Login.service';
+import ConsentChecks, { ConsentValues } from '../consent/ConsentChecks';
+import MarketingConsentToggle from '../consent/MarketingConsentToggle';
+import { SignupFields, loadSignupFields } from '../../utils/signupFields';
+import { FormField, loadSignupCustomFields, valuesToSend } from '../../utils/customFields';
 
 /**
- * register     "new user": email + password sign-up.
- * sso-signup   after "Continue with Google" with a new identity: email from Google (read-only), no password;
+ * email-signup after a right code by email for a new address ("קבלת קוד למייל"): email read-only (the verified
+ *              address, held by the server in a signed cookie); the account is created only when this form is sent.
+ * sso-signup   after "Continue with Google" with a new identity: email from Google (read-only);
  *              the account is created only when this form is sent.
+ * Candidates have no password (since 11.2026).
  * complete     an account missing required details (e.g. created by an earlier Google sign-in): same form.
  * edit         the personal area: a candidate edits their own details (email read-only).
+ * add-candidate  a signed-in staff member or employer becomes a candidate too, on the same account (several roles
+ *              per account since 23.11.2026): the sign-up form and consent, sent to POST /api/users/me/roles/candidate.
  */
-export type RegisterMode = 'register' | 'sso-signup' | 'complete' | 'edit';
+export type RegisterMode = 'email-signup' | 'sso-signup' | 'complete' | 'edit' | 'add-candidate';
 
 // What the server accepts for a candidate's own details (server/src/security/pure.ts PROFILE_FIELDS).
-const profileFields = (v: RegisterFormValues) => ({
-    firstName: v.firstName, lastName: v.lastName, phoneNumber: v.phoneNumber, citySymbol: Number(v.citySymbol) || undefined,
+// The ID number: left out when the setting hides it; in the personal area an empty one clears it.
+const profileFields = (v: RegisterFormValues, fields: SignupFields, own: boolean, custom: FormField[] = []) => ({
+    firstName: v.firstName, lastName: v.lastName, phoneNumber: v.phoneNumber || undefined, citySymbol: Number(v.citySymbol) || undefined,
     gender: v.gender || undefined, dateOfBirth: v.dateOfBirth || undefined, skills: v.skills ?? [],
+    ...(fields.idNumber === 'hidden' ? {} : own ? { idNumber: v.idNumber ?? '' } : v.idNumber ? { idNumber: v.idNumber } : {}),
     ...(v.cvFileUrl ? { cvFileUrl: v.cvFileUrl } : {}),
+    // The added questions (settings screen): every one of them, '' / false = no answer.
+    ...(custom.length ? { customFields: valuesToSend(custom, v.customFields) } : {}),
 });
 
-const RegisterUser: React.FC<{ onSuccess: () => void; mode?: RegisterMode; prefill?: Partial<RegisterFormValues>; hasCv?: boolean }> = ({ onSuccess, mode = 'register', prefill, hasCv }) => {
+const RegisterUser: React.FC<{ onSuccess: () => void; mode?: RegisterMode; prefill?: Partial<RegisterFormValues>; hasCv?: boolean }> = ({ onSuccess, mode = 'email-signup', prefill, hasCv }) => {
     const translations = i18n.getTranslations();
     const formikRef = useRef<FormikProps<RegisterFormValues>>(null);
     const [step, setStep] = useState<number>(1);
@@ -38,10 +50,22 @@ const RegisterUser: React.FC<{ onSuccess: () => void; mode?: RegisterMode; prefi
     const { showToast } = useToastStore();
     const setUser = useAuthStore.getState().setUser;
     const [blockButton,setBlockButton] = useState(false)
-    useEffect(() => { if (mode === 'register' || mode === 'sso-signup') track('sign_up_start', applyContextParams()); }, []);
+    // Sign-up only: the required terms box and the optional marketing box (server/src/security/consent.ts).
+    const isSignUp = mode === 'email-signup' || mode === 'sso-signup' || mode === 'add-candidate';
+    const [consent, setConsent] = useState<ConsentValues>({ consent: false, marketingConsent: false });
+    const [consentError, setConsentError] = useState(false);
+    useEffect(() => { if (isSignUp) track('sign_up_start', applyContextParams()); }, []);
+    // Which fields are required / optional / hidden (admins' setting; the server checks the same).
+    const [fields, setFields] = useState<SignupFields | null>(null);
+    const [customFields, setCustomFields] = useState<FormField[] | null>(null);
+    useEffect(() => {
+        let alive = true;
+        Promise.all([loadSignupFields(), loadSignupCustomFields()]).then(([f, c]) => { if (alive) { setFields(f); setCustomFields(c); } });
+        return () => { alive = false; };
+    }, []);
     const tp = translations.Profile;
-    const intro = mode === 'sso-signup' ? tp.SignUpIntro : mode === 'complete' ? tp.CompleteIntro : '';
-    const emailHint = mode === 'sso-signup' ? tp.EmailFromGoogle : mode === 'register' ? undefined : tp.EmailReadOnly;
+    const intro = mode === 'sso-signup' ? tp.SignUpIntro : mode === 'email-signup' ? tp.EmailSignUpIntro : mode === 'complete' ? tp.CompleteIntro : '';
+    const emailHint = mode === 'sso-signup' ? tp.EmailFromGoogle : mode === 'email-signup' ? tp.EmailFromCode : tp.EmailReadOnly;
     const [userData, setUserData] = useState<RegisterFormValues>({
         email: '',
         gender: null,
@@ -50,8 +74,6 @@ const RegisterUser: React.FC<{ onSuccess: () => void; mode?: RegisterMode; prefi
         dateOfBirth: null,
         phoneNumber: '',
         citySymbol: 0,
-        password: '',
-        confirmPassword: '',
         skills: [],
         cvFileUrl:'',
         hasAppliedToJob: false,
@@ -73,34 +95,41 @@ const RegisterUser: React.FC<{ onSuccess: () => void; mode?: RegisterMode; prefi
     };
 
     const handleFinalSubmit = async () => {
-        if (mode === 'sso-signup') {
-            const r = await LoginService.getInstance().completeSsoSignup(profileFields(userData));
+        if (isSignUp && !consent.consent) {
+            setConsentError(true);
+            setBlockButton(false);
+            document.getElementById('signup-consent')?.focus();
+            return;
+        }
+        if (mode === 'sso-signup' || mode === 'email-signup') {
+            const values = { ...profileFields(userData, fields!, false, customFields ?? []), ...consent };
+            const r = mode === 'sso-signup'
+                ? await LoginService.getInstance().completeSsoSignup(values)
+                : await LoginService.getInstance().completeEmailSignup(values);
             if (isString(r)) { setBlockButton(false); showToast(r, 'error'); return; }
             setUser({ ...r.user, jobApplicationsId: r.jobApplicationsId } as any);
-            track('sign_up', { method: 'google', ...applyContextParams() });
+            track('sign_up', { method: mode === 'sso-signup' ? ssoSignUpMethod() : 'email_code', ...applyContextParams() });
             clearApplyContext();
             onSuccess();
             return;
         }
+        if (mode === 'add-candidate') {
+            const r = await UserService.getInstance().addMyRole('candidate', { ...profileFields(userData, fields!, false), ...consent });
+            if (isString(r)) { setBlockButton(false); showToast(r, 'error'); return; }
+            // The session now carries the candidate role too: read it again.
+            const s = await LoginService.getInstance().getSession();
+            if (s && !isString(s)) setUser({ ...s.user, jobApplicationsId: s.jobApplicationsId } as any);
+            onSuccess();
+            return;
+        }
         if (mode === 'complete' || mode === 'edit') {
-            const r = await UserService.getInstance().updateMe(profileFields(userData));
+            const r = await UserService.getInstance().updateMe(profileFields(userData, fields!, true, customFields ?? []));
             if (isString(r)) { setBlockButton(false); showToast(r, 'error'); return; }
             const current = useAuthStore.getState().user;
             setUser({ ...(current ?? {}), ...r.user } as any);
             showToast(tp.Saved, 'success');
             onSuccess();
             return;
-        }
-        const result = await UserService.getInstance().createNewUser(userData);
-        if (isString(result)) {
-            setBlockButton(false)
-            showToast(result, "error");
-        } else {
-            setUser(result.user);
-            track('sign_up', { method: 'email', ...applyContextParams() });
-            clearApplyContext();
-            onSuccess();
-            // show success toast or message
         }
     };
 
@@ -124,19 +153,28 @@ const RegisterUser: React.FC<{ onSuccess: () => void; mode?: RegisterMode; prefi
                 {step === 1 ? (
                     <div className=' overflow-auto'>
                         {intro && <p className="font-RubikRegular fs-1-125rem px-4 pt-3 mb-0" role="note">{intro}</p>}
-                        <UserDetails
+                        {mode === 'edit' && <MarketingConsentToggle className="mx-4 mt-3" />}
+                        {!fields || !customFields ? <div className="p-5 text-center" aria-busy="true"><Spinner animation="border" size="sm" /></div> : <UserDetails
+                         fields = {fields}
+                         customFields = {customFields}
                          initialData = {userData}
                           formikRef = {formikRef}
                            handleSubmit = {handleUserDetailsSubmit}
-                           noPassword = {mode !== 'register'}
                            emailReadOnlyHint = {emailHint}
                            cvHint = {hasCv ? tp.CurrentCv : undefined}
-                    /></div>
+                    />}</div>
                 ) : (
+                    <>
                     <UserSkills
                         initialSelectedSkills={userData.skills}
                         onSkillsChange={handleUserSkillsChange}
                     />
+                    {isSignUp && (
+                        <ConsentChecks idPrefix="signup" audience="candidate" className="px-4 pb-3" values={consent}
+                            termsError={consentError}
+                            onChange={(v) => { setConsent(v); if (v.consent) setConsentError(false); }} />
+                    )}
+                    </>
                 )}
             </div>
             <div className={`text-start bg-light position-sticky bottom-0 w-100 border-top border-dark border-radius-b-40 py-2 px-3 height-5-625rem d-flex ${step === 2 ? 'justify-content-between' : 'justify-content-end'}`} >

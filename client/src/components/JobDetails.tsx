@@ -17,11 +17,14 @@ import { i18n } from '../i18n/I18n';
 import SelectAutocomplete from './common/SelectAutocomplete';
 import { SkillsService } from '../services/api/Skills.service';
 import useAuthStore from '../store/Auth.store';
+import { canManageContent } from '../i18n/General.enums';
 import Checkbox from './common/Checkbox';
-import ApplyPolicyOverrideField from './applyPolicy/ApplyPolicyOverrideField';
+import JobFlags from './jobsAdmin/JobFlags';
 import SettingsService from '../services/api/Settings.service';
 import { ApplyPolicy } from '../models/interfaces/Props.interfaces';
 import { fromDateInput, isFutureDate, maxScheduleInput, toDateInput } from '../utils/jobBoard';
+import CustomFieldInputs from './common/CustomFieldInputs';
+import { customErrors, FormField, loadJobCustomFields, valuesToSend } from '../utils/customFields';
 
 interface JobDetailsProps {
   job?: JobData; // Optional job prop for editing
@@ -45,11 +48,13 @@ const defaultJob: JobData = {
   publishDate:  new Date(),
   isSponsored: false,
   isMarked: false,
-  isSelfApply: true,
+  isSelfApply: false,
   externalLink:'',
-  quickApplyOverride: null,
-  quickApplyWithoutCvOverride: null,
-  isPublic: true,
+  thresholdCondition: '',
+  // A new job follows the site-wide "הגדרות הגשה" until a content manager picks a value here.
+  guestModeOverride: null,
+  quickCvOverride: null,
+  regularCvOverride: null,
 };
 
 const JobDetails: React.FC<JobDetailsProps> = ({ job = defaultJob, onSave, setReferenceToSubmitTrigger }) => {
@@ -61,7 +66,11 @@ const JobDetails: React.FC<JobDetailsProps> = ({ job = defaultJob, onSave, setRe
   const translations = i18n.getTranslations();
   const { showToast } = useToastStore();
   const { user } = useAuthStore();
+  // A placement coordinator edits a job but not its threshold condition or apply settings (server: roleFields.ts).
+  const coordinator = !canManageContent(user?.role);
   const [applyDefaults, setApplyDefaults] = useState<ApplyPolicy | undefined>();
+  // The job form's added fields (settings screen); coordinators fill them too.
+  const [jobFields, setJobFields] = useState<FormField[]>([]);
 
   const JobSchema = Yup.object().shape({
     title: Yup.string()
@@ -104,6 +113,10 @@ const JobDetails: React.FC<JobDetailsProps> = ({ job = defaultJob, onSave, setRe
       .nullable(),
 
     comments: Yup.string(),
+    // תנאי סף: plain text, optional (server: thresholdCondition.ts, 3–500 characters).
+    thresholdCondition: Yup.string().trim().nullable()
+      .test('threshold-min', translations.Threshold.TooShort, (v) => !v || v.trim().length >= 3)
+      .max(500, translations.Threshold.TooLong),
     isSponsored: Yup.boolean(),
     isMarked: Yup.boolean(),
     isSelfApply: Yup.boolean(),
@@ -165,6 +178,7 @@ const JobDetails: React.FC<JobDetailsProps> = ({ job = defaultJob, onSave, setRe
     SettingsService.getInstance().getApplyPolicy().then((result) => {
       if (!isString(result)) setApplyDefaults(result);
     });
+    loadJobCustomFields().then(setJobFields);
   }, []);
 
 
@@ -186,24 +200,32 @@ const JobDetails: React.FC<JobDetailsProps> = ({ job = defaultJob, onSave, setRe
       contactPersonEmail: job.contactPersonEmail ,
       externalLink: job.externalLink,
       comments: job.comments ,
+      thresholdCondition: job.thresholdCondition ?? '',
       location: job.location ,
       publishDate: job.publishDate ,
       isSponsored: job.isSponsored,
       isMarked: job.isMarked,
       isSelfApply: job.isSelfApply,
-      quickApplyOverride: job.quickApplyOverride ?? null,
-      quickApplyWithoutCvOverride: job.quickApplyWithoutCvOverride ?? null,
-      isPublic: job.isPublic !== false,
+      guestModeOverride: job.guestModeOverride ?? null,
+      quickCvOverride: job.quickCvOverride ?? null,
+      regularCvOverride: job.regularCvOverride ?? null,
       schedulePublish: false,
       atLeastOneContact: "",
+      customFields: { ...(job.customFields ?? {}) } as Record<string, string | boolean>,
     },
 
     validationSchema: JobSchema,
+    validate: (values) => {
+      const e = customErrors(jobFields, values.customFields);
+      return Object.keys(e).length ? ({ customFields: e } as any) : {};
+    },
     onSubmit: (values) => {
       const { atLeastOneContact, ...cleanedValues } = values;
       const jobData: JobData = {
         ...cleanedValues,
         citySymbol: Number(values.citySymbol),
+        // '' clears the condition (the server stores none).
+        thresholdCondition: (values.thresholdCondition ?? '').trim(),
         dateToDisplay: DayValues.TODAY,
         // A new job starts Active; an edit keeps the job's status (it used to reactivate closed jobs).
         status: job?._id && job.status ? job.status : JobStatus.ACTIVE,
@@ -211,6 +233,8 @@ const JobDetails: React.FC<JobDetailsProps> = ({ job = defaultJob, onSave, setRe
         schedulePublish: isFutureDate(values.publishDate) ? values.schedulePublish === true : undefined,
         locationPreview: choosenlable,
         ...(job?._id ? {} : { uploadBy: user?.email || '' }),
+        // Every added field ('' / false = no answer); left out when the form has none.
+        customFields: jobFields.length ? valuesToSend(jobFields, values.customFields) : undefined,
       };
 
 
@@ -328,7 +352,8 @@ const JobDetails: React.FC<JobDetailsProps> = ({ job = defaultJob, onSave, setRe
                 formik.setFieldValue('isSponsored', isChecked);
                 if (isChecked) {
                   formik.setFieldValue('isMarked', true);
-                  formik.setFieldValue('isSelfApply', false);
+                  // A sponsored job is applied for through SKEELZ (as before: no self apply).
+                  if (formik.values.guestModeOverride === 'self') formik.setFieldValue('guestModeOverride', null);
                 }
               }}
             />
@@ -344,27 +369,9 @@ const JobDetails: React.FC<JobDetailsProps> = ({ job = defaultJob, onSave, setRe
               boxSize='1.25rem'
             />
           </div>
-           <div className="col-md-3 mb-3 pe-1 pt-3 d-flex align-content-center">
-            <Checkbox
-              name="isSelfApply"
-              label={translations.JobDetails.SelfApply}
-              checked={formik.values.isSelfApply}
-              onBlur={formik.handleBlur}
-              className="p-2 font-RubikSmall"
-              boxSize='1.25rem'
-              disabled={formik.values.isSponsored}
-              onChange={(e) => {
-                const isChecked = e.target.checked;
-                formik.setFieldValue('isSelfApply', isChecked);
-                if (isChecked) {
-                  formik.setFieldValue('isSponsored', false);
-                }
-              }}
-            />
-          </div>
         </div>
 
-        {/* Board placement (docs/jobs-management.md): publish date (a future date = scheduled, hidden until then) and visibility. */}
+        {/* Board placement (docs/jobs-management.md): publish date (a future date = scheduled, hidden until then) Only Active jobs are public (the status). */}
         <div className="row mb-2 align-items-end">
           <div className="col-md-3 mb-3">
             <label htmlFor="job-publish-date" className="font-RubikMedium fs-6 mb-1 d-block">{translations.JobsAdmin.FormPublishDate}</label>
@@ -394,41 +401,26 @@ const JobDetails: React.FC<JobDetailsProps> = ({ job = defaultJob, onSave, setRe
               <div id="job-publish-date-hint" className="font-RubikSmall text-color-dark-grey">{translations.JobsAdmin.ScheduledHint}</div>
             </div>
           )}
-          <div className="col-md-5 mb-3">
-            <Checkbox
-              name="isPrivate"
-              label={translations.JobsAdmin.FormPrivate}
-              checked={formik.values.isPublic === false}
-              onChange={(e) => formik.setFieldValue('isPublic', !e.target.checked)}
-              className="p-2 font-RubikSmall"
-              boxSize='1.25rem'
-            />
-          </div>
         </div>
 
         <div className="row mb-2">
           <div className="col-12">
             <h6 className="font-RubikBold pb-1">{translations.ApplyPolicy.JobSectionTitle}</h6>
-          </div>
-          <div className="col-md-6">
-            <ApplyPolicyOverrideField
-              name="quickApplyOverride"
-              label={translations.ApplyPolicy.QuickApply}
-              hint={translations.ApplyPolicy.QuickApplyHint}
-              value={formik.values.quickApplyOverride}
-              inheritedValue={applyDefaults?.quickApply}
-              onChange={(v) => formik.setFieldValue('quickApplyOverride', v)}
+            {/* Ways to apply (utils/applyPolicy.ts) as compact checkboxes; equal to the site default = follow it. */}
+            <JobFlags
+              idPrefix="job-form-flags"
+              label={translations.ApplyPolicy.JobSectionTitle}
+              values={formik.values as any}
+              defaults={applyDefaults}
+              show={{}}
+              disabled={coordinator}
+              onChange={(patch) => {
+                for (const [k, v] of Object.entries(patch)) formik.setFieldValue(k, v);
+                // Direct apply and sponsored don't go together (as before).
+                if (patch.guestModeOverride === 'self') formik.setFieldValue('isSponsored', false);
+              }}
             />
-          </div>
-          <div className="col-md-6">
-            <ApplyPolicyOverrideField
-              name="quickApplyWithoutCvOverride"
-              label={translations.ApplyPolicy.QuickApplyWithoutCv}
-              hint={`${translations.ApplyPolicy.QuickApplyWithoutCvHint} · ${translations.ApplyPolicy.OnlyWhenQuickApply}`}
-              value={formik.values.quickApplyWithoutCvOverride}
-              inheritedValue={applyDefaults?.quickApplyWithoutCv}
-              onChange={(v) => formik.setFieldValue('quickApplyWithoutCvOverride', v)}
-            />
+            <div className="font-RubikSmall text-color-dark-grey mt-1">{coordinator ? translations.JobsAdmin.ContentManagerOnly : translations.JobsAdmin.FlagsHint}</div>
           </div>
         </div>
 
@@ -463,7 +455,44 @@ const JobDetails: React.FC<JobDetailsProps> = ({ job = defaultJob, onSave, setRe
           </div>
         </div>
 
-        <h5 className='font-RubikBold pb-4'>{translations.JobDetails.ContactInfoTitle}</h5>
+        <div className="row">
+          <div className="col-12">
+            <TextArea
+              label={translations.Threshold.Label}
+              name="thresholdCondition"
+              value={formik.values.thresholdCondition ?? ''}
+              onChange={formik.handleChange}
+              onBlur={formik.handleBlur}
+              rows={2}
+              maxLength={500}
+              required={false}
+              disabled={coordinator}
+              aria-describedby="thresholdCondition-hint"
+              error={formik.touched.thresholdCondition && formik.errors.thresholdCondition ? String(formik.errors.thresholdCondition) : undefined}
+              placeholder={translations.Threshold.FieldPlaceholder}
+            />
+            <p id="thresholdCondition-hint" className="font-RubikSmall text-color-dark-grey mt-n2 mb-3">{coordinator ? translations.JobsAdmin.ContentManagerOnly : translations.Threshold.FieldHint}</p>
+          </div>
+        </div>
+
+        {jobFields.length > 0 && (
+          <>
+            <h5 className='font-RubikBold pb-1'>פרטים נוספים</h5>
+            <p className='font-RubikSmall text-color-dark-grey pb-2 mb-0'>שדות שמנהלי התוכן הוסיפו בהגדרות. חלקם מוצגים בעמוד המשרה.</p>
+            <CustomFieldInputs
+              fields={jobFields}
+              values={formik.values.customFields}
+              idPrefix="job"
+              errors={formik.submitCount > 0 ? ((formik.errors as any).customFields ?? {}) : {}}
+              requiredText={translations.Inputs.Required}
+              invalidText={translations.Inputs.InvalidValue}
+              onChange={(id, value) => formik.setFieldValue('customFields', { ...(formik.values.customFields ?? {}), [id]: value })}
+            />
+          </>
+        )}
+
+        <h5 className='font-RubikBold pb-1'>{translations.JobDetails.ContactInfoTitle}</h5>
+        <p className='font-RubikSmall text-color-dark-grey pb-3 mb-0'>{translations.ApplyPolicy.ContactPublicHint}</p>
         <div className="row gap-4">
           <div className="col-sm-2 col-xs-12 flex-grow-1 mb-3">
             <TextInput

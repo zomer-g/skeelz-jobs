@@ -9,8 +9,8 @@ The SKEELZ job board (jobs.skeelz.co.il), running as **one** xhostd app.
 | Processes | One Node process: API + built React client |
 | Database | xhostd Postgres (`pg`, SQL in `server/src/dal`). Ids are 24-hex, so existing `/job/<id>` links keep working |
 | CV files | xhostd Blob (private; xhostd injects `S3_*`), through a small built-in client (`server/src/services/blobClient.ts`). Type check by magic bytes, PDF re-saved, DOCX macros rejected. Download is content-manager-only |
-| Email | **none**: no email provider; `sendEmail` only logs |
-| Salesforce / SMOOV | **off** unless `ENABLE_SALESFORCE` / `ENABLE_SMOOVE` = `true` |
+| Email | **Resend** (`server/src/services/emailService.ts`), only with `SEND_EMAIL_ENABLED=true` + `RESEND_API_KEY` + `EMAIL_FROM`; otherwise it only logs. Setup: `docs/email-signin.md` |
+| Salesforce / SMOOV | **off** unless `ENABLE_SALESFORCE` / `ENABLE_SMOOVE` = `true` (Salesforce also needs every `SALESFORCE_*` setting valid: `docs/salesforce.md`) |
 | Analytics | none unless `GTM_ID` / `GA_ID` are set |
 | robots.txt | `Disallow: /` unless `ALLOW_INDEXING=true` |
 
@@ -20,10 +20,10 @@ admin action, written before the data leaves; daily limits per admin (40 CVs, 1,
 grants; admin access reviews; redacted server logs; a public `/privacy` page. Details: `docs/security.md`,
 `docs/privacy/`, the admin screen `/security-management`. Rules for changes: `CLAUDE.md`.
 
-### Separation of duties (11.11.2026)
+### Roles (11.11.2026, admin = content manager + security since 12.11.2026)
 Three roles: candidate (`user`), **content manager** (`content_manager`: jobs management, candidates, applications,
-CVs — within the daily limits) and **admin** (`admin`: security screen, activity log, alerts, grants, access reviews,
-and the staff users screen at `/users-management`; sees no candidates). The one-time migration keeps
+CVs — within the daily limits) and **admin** (`admin`: everything a content manager does, plus the security screen,
+activity log, alerts, grants, access reviews, API keys and the staff users screen at `/staff-management`). The one-time migration keeps
 `INITIAL_ADMIN_EMAIL` (default `ADMIN_EMAIL`) as admin and makes every other former admin a content manager.
 Details: `docs/security.md` → Roles.
 
@@ -38,11 +38,11 @@ Details: `docs/security.md` → Roles.
 - Guest apply loads the job from the DB instead of trusting the job object sent by the browser.
 - Page data is injected with `<`-escaped JSON and a CSP nonce; CSP, `X-Frame-Options`, HSTS.
 - CORS no longer echoes any origin with credentials (same-origin; optional `ALLOWED_ORIGINS`).
-- Login gives the same error for unknown email and wrong password.
+- Sign-in by code gives the same answer for every email (no account enumeration).
 - Guest apply gives the same answer whether or not the email has an account (it answered "user exists").
   Before turning Salesforce on: a guest application with a registered email creates another guest Contact, so check the org's duplicate rules.
 - Anonymous CV uploads that nobody attached are deleted after `CV_PENDING_TTL_HOURS` (default 24), at boot and hourly.
-- Rate limits on login, sign-up, upload, apply and password reset.
+- Rate limits on sign-in codes (per IP and per address), sign-up, upload and apply.
 - Whitelisted sort fields, SOQL ids validated, no PII / API keys in logs, emails HTML-escaped.
 
 ## Map search
@@ -110,7 +110,9 @@ cd ../server && PORT=3100 node dist/index.js
 BASE=http://localhost:3100 node test/e2e.mjs   # end-to-end checks (localhost only)
 npm run test:unit                              # unit tests (no DB), e.g. which CV goes with an application
 BASE=http://localhost:3100 node test/e2e-submissions.mjs   # employer job form (uses up the 5/hour per-IP budget)
-BASE=http://localhost:3100 node test/e2e-auth.mjs          # sign-in: password, staff refusals, "Continue with Google" = xhostd SSO (mock)
+BASE=http://localhost:3100 node test/e2e-auth.mjs          # sign-in: code by email, staff refusals, "Continue with Google" = xhostd SSO (mock)
+BASE=http://localhost:3100 node test/e2e-email-signin.mjs  # sign-in code by email: neutral answers, limits, tries, single use, sign-up form
+node test/e2e-consent.mjs                                  # consent boxes + SMOOV gate (starts its own server on 3105 with a SMOOV mock; local DATABASE_URL)
 ```
 
 Staff sign in **only with xhostd SSO**, so the e2e scripts sign staff in through a mock xhostd
@@ -122,38 +124,41 @@ SSO_ISSUER=http://127.0.0.1:3199
 SSO_JWKS_URL=http://127.0.0.1:3199/jwks
 ```
 
-### Sign-in (password, "Continue with Google" = xhostd SSO)
+### Sign-in ("Continue with Google" = xhostd SSO, or a code by email — no passwords)
 
 - **Continue with Google** is xhostd's own sign-in (`/xhost-auth/login`, any Google account; nothing to register in Google
   Cloud). On when `SSO_ENABLED=true`.
-- Candidates: email + password, or Continue with Google (a new email fills the sign-up form first — email from Google,
-  no password — and the account is created when it is sent; an existing candidate is linked).
+- Candidates: Continue with Google, or **"קבלת קוד למייל"** — a one-time 6-digit code by email (10 minutes, single use,
+  5 tries; `docs/email-signin.md`). A new email (Google or code) fills the sign-up form first, and the account is created
+  when it is sent; an existing candidate is signed in (Google: linked). Candidates have no password.
 - Personal area ("אזור אישי" → "הפרטים שלי"): a candidate edits their own details and profile CV (`/api/users/me`); email
   is read-only.
 - Staff (admin, content manager): **Continue with Google only**, matched to an existing staff account by subject or email.
-  Password login and password reset are refused for staff on the server. Rule: `STAFF_ROLES` in `server/src/security/pure.ts`.
+  Staff never get a sign-in code (the same neutral answer). Rule: `STAFF_ROLES` in `server/src/security/pure.ts`.
   Details: `docs/security.md`.
 
-### Apply policy (quick apply / CV)
+### Ways to apply (self / quick / regular) and CV rules
 
-Admins set two site-wide defaults under Jobs → "הגדרות הגשה" (stored in
-`app_settings`, key `applyPolicy`): **quick apply** (a guest may apply without
-registering) and **quick apply without a CV**. Each job can override either one
-in its edit form (`jobs.quick_apply_override`, `jobs.quick_apply_without_cv_override`;
-NULL = inherit). Effective value = override ?? default; it is sent with every job
-as `applyPolicy` and enforced in `POST /api/jobs/guestApply` (`jb10` quick apply
-off, `jb11` CV required). Registered candidates are not affected. Defaults match
-the old behaviour: quick apply on, CV optional. The one-shot imports never write
-the override columns, so they keep whatever admins set.
+Three ways to apply. A visitor who is **not signed in** gets one guest mode per job: **self** (הגשה עצמאית — the
+job page shows the employer's contact / external link and they apply directly; nothing goes through SKEELZ),
+**quick** (הגשה מהירה — the guest form, handled by the nonprofit) or **none** (sign in to apply). A **registered,
+signed-in** candidate can always apply the regular way. The CV is **required** or **optional**, separately for quick
+and for regular applications. Content managers set site-wide defaults under Jobs → "הגדרות הגשה"
+(`app_settings` key `applyPolicy`: `{ guestMode, quickCv, regularCv }`) and per-job overrides in the table or the
+job form (`jobs.guest_mode_override`, `quick_cv_override`, `regular_cv_override`; NULL = inherit). Effective
+value = override ?? default, sent with every job as `applyPolicy`, enforced in `POST /api/jobs/guestApply`
+(`jb12` self apply, `jb10` closed, `jb11` CV required) and `POST /api/jobs/apply/:id` (`jb11`). `isSelfApply`
+(Salesforce `isSelfApply_cambium__c`) = effective guest mode is self. Rules: `server/src/models/schemas/applyPolicy.ts`,
+`docs/jobs-management.md` ("Ways to apply").
 
-### Jobs management (pin to top, publish date, private, crown, delete)
+### Jobs management (pin, bump, status, publish date, delete)
 
-`/jobs-management` (content managers): one table where each job can be bumped to the top of the board (הקפצה),
-get a new publish date (a future date = scheduled, hidden until then), be made private (unlisted: not on the board,
-map, public API or MCP; the direct link works), get the crown (sponsored), have its apply policy overridden, and be
-deleted to an archive (undo / restore; applications are kept). Public order everywhere: pinned first (latest pin on
-top), then publish date, newest first. Integrations don't overwrite what is set there. Details:
-[`docs/jobs-management.md`](docs/jobs-management.md); e2e: `BASE=http://localhost:3100 node test/e2e-jobs-admin.mjs`.
+`/jobs-management` (content managers): one table where each job can be pinned (נעץ: stays first until unpinned,
+marked with a pin on the board and `isPinned` in the public API/MCP) or bumped (הקפצה ↑: once to the top), get a new
+publish date (a future date = scheduled, hidden until then), a status (only Active jobs are on the site; there is
+no separate private flag), and small checkboxes, one column each: sponsored, direct / quick apply and CV required; it can also be deleted to an archive (undo / restore; applications are kept). Public order everywhere:
+pinned first (latest pin on top), then by publish date or last bump, newest first. Integrations don't overwrite what
+is set there. Details: [`docs/jobs-management.md`](docs/jobs-management.md); e2e: `BASE=http://localhost:3100 node test/e2e-jobs-admin.mjs`.
 
 ### CV on apply (registered candidates)
 
@@ -183,8 +188,9 @@ application stores the CV it was sent with (`job_applications.cv_file_url`,
 - **Limits and log:** each token (and the secret) has its own daily limits, same as an admin (1,500 candidates,
   40 CVs, alerts at half); strict log entries before data leaves. 401/403 are logged as `access.denied`.
 - **Salesforce push:** idempotent (finds the record in Salesforce by its id field, updates or creates it). State per
-  record in `salesforce_sync` (last pushed at, Salesforce Id, last error code). While `ENABLE_SALESFORCE` is off it
-  answers 409 `salesforce_disabled` and calls nothing.
+  record in `salesforce_sync` (last pushed at, Salesforce Id, last error code). While Salesforce is off it
+  answers 409 `salesforce_disabled` and calls nothing. The site's own changes go through the sync queue
+  (`docs/salesforce.md`: setup guide in Hebrew, env table, connection check).
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" http://localhost:3100/api/internal/v1/jobs?status=Suspended
@@ -200,8 +206,7 @@ cd server && INTERNAL_API_SECRET=... BASE=http://localhost:3100 DATABASE_URL=pos
 ## xhostd
 
 - `install.sh` builds the client (heap 1 GB) and the server, then drops dev deps.
-- `launch.sh` migrates, optionally copies public data from the live board
-  (`SEED_FROM_LIVE=true`, only when the DB has no jobs), creates the first admin
+- `launch.sh` migrates (no copy from the live board any more: `SEED_FROM_LIVE` is ignored since 17.11.2026), creates the first admin
   (`ADMIN_EMAIL` — the Google address they sign in with; no password; made admin again at every boot), then starts the server
   (heap `WEB_HEAP_MB`, default 192).
 
@@ -226,5 +231,5 @@ restarts keep it. Prod's data is copied (`importFromProd.js`) only:
 
 Env: `ACCESS_TOKEN_SECRET`, `REFRESH_TOKEN_SECRET`, `RESET_TOKEN_SECRET` (secrets),
 `CLIENT_BASE_URL`, `ADMIN_EMAIL` (the admin's Google address), `SSO_ENABLED=true` (staff sign in only with it), optional
-`SEED_FROM_LIVE`, `GTM_ID`, `GA_ID`, `ALLOW_INDEXING`, `APPLICATION_NOTIFICATION_EMAIL`,
+`GTM_ID`, `GA_ID`, `ALLOW_INDEXING`, `APPLICATION_NOTIFICATION_EMAIL`,
 and, only after approval, Salesforce/SMOOV credentials.

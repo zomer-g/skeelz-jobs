@@ -19,25 +19,40 @@ test('public order: pinned first (latest pin on top), then publish date newest f
     { id: 'e', status: 'Active', publishDate: at(-5 * day) },
   ];
   assert.deepEqual([...jobs].sort(comparePublicOrder).map((j) => j.id), ['c', 'b', 'a', 'e', 'd']);
-  assert.equal(PUBLIC_ORDER_SQL('j'), 'j.pinned_at DESC NULLS LAST, j.publish_date DESC, j.id DESC');
+  assert.equal(PUBLIC_ORDER_SQL('j'), 'j.pinned_at DESC NULLS LAST, GREATEST(j.publish_date, j.bumped_at) DESC, j.id DESC');
 });
 
-test('listed publicly = Active, public, not archived, published', () => {
-  const base = { status: 'Active', isPublic: true, deletedAt: null, publishDate: at(-day) };
+test('bump: once to the top of the unpinned jobs; newer jobs go above it later; pins stay first', () => {
+  const jobs = [
+    { id: 'pin', status: 'Active', publishDate: at(-40 * day), pinnedAt: at(-3 * day) },
+    { id: 'new', status: 'Active', publishDate: at(-1 * day) },
+    { id: 'old', status: 'Active', publishDate: at(-30 * day), bumpedAt: at(-1000) }, // bumped just now
+    { id: 'mid', status: 'Active', publishDate: at(-5 * day) },
+    { id: 'stale', status: 'Active', publishDate: at(-2 * day), bumpedAt: at(-9 * day) }, // bump older than publish: no effect
+  ];
+  assert.deepEqual([...jobs].sort(comparePublicOrder).map((j) => j.id), ['pin', 'old', 'new', 'stale', 'mid']);
+  // A job published after the bump goes above the bumped one.
+  const later = [...jobs, { id: 'newest', status: 'Active', publishDate: at(-10) }];
+  assert.deepEqual([...later].sort(comparePublicOrder).map((j) => j.id).slice(0, 3), ['pin', 'newest', 'old']);
+});
+
+test('listed publicly = Active, not archived, published (the status is the only switch)', () => {
+  const base = { status: 'Active', deletedAt: null, publishDate: at(-day) };
   assert.equal(isPubliclyListed(base, now), true);
-  assert.equal(isPubliclyListed({ ...base, isPublic: false }, now), false);
+  assert.equal(isPubliclyListed({ ...base, isPublic: false } as any, now), true, 'the retired private flag is ignored');
   assert.equal(isPubliclyListed({ ...base, deletedAt: at(-1000) }, now), false);
   assert.equal(isPubliclyListed({ ...base, publishDate: at(day) }, now), false);
   for (const status of ['Suspended', 'Closed', 'active', '']) assert.equal(isPubliclyListed({ ...base, status }, now), false);
-  assert.match(PUBLIC_LISTING_SQL('j'), /j\.status = 'Active' AND j\.is_public = true AND j\.deleted_at IS NULL AND j\.publish_date <= now\(\)/);
+  assert.match(PUBLIC_LISTING_SQL('j'), /^j\.status = 'Active' AND j\.deleted_at IS NULL AND j\.publish_date <= now\(\)$/);
 });
 
-test('a private job still opens by direct link; archived and scheduled do not', () => {
-  const base = { status: 'Active', isPublic: false, deletedAt: null, publishDate: at(-day) };
+test('a direct link opens an Active published job; archived, scheduled and not-Active do not', () => {
+  const base = { status: 'Active', deletedAt: null, publishDate: at(-day) };
   assert.equal(isOpenByLink(base, now), true);
   assert.equal(isOpenByLink({ ...base, deletedAt: now }, now), false);
   assert.equal(isOpenByLink({ ...base, publishDate: at(day) }, now), false);
   assert.equal(isOpenByLink({ ...base, status: 'Closed' }, now), false);
+  assert.equal(isOpenByLink({ ...base, status: 'Suspended' }, now), false);
 });
 
 test('publish date: past ok, future only as scheduled (max 365 days), rubbish refused', () => {

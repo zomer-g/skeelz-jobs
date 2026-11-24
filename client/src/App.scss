@@ -1688,8 +1688,8 @@
   height: 18px;
   border-radius: 4px;
   /* Slightly rounded corners */
-  border: 1px solid #d0d5dd;
-  /* Border color */
+  border: 1.5px solid #667085;
+  /* Border color: dark enough to see on white */
   transition: background-color 0.3s ease, border-color 0.3s ease;
   position: relative;
   /* For positioning the custom checkmark */
@@ -1701,9 +1701,9 @@
 
 /* Checked state */
 .custom-checkbox .form-check-input:checked {
-  background-color: #c9ffff;
-  /* Light-blue background when checked */
-  border-color: #00dbda;
+  /* Dark teal so Bootstrap's white check mark shows clearly (the old light blue hid it). */
+  background-color: #0f5c4c;
+  border-color: #0f5c4c;
   /* Blue border when checked */
 }
 
@@ -1727,8 +1727,8 @@
   height: 18px;
   border-radius: 4px;
   /* Slightly rounded corners */
-  border: 1px solid #d0d5dd;
-  /* Border color */
+  border: 1.5px solid #667085;
+  /* Border color: dark enough to see on white */
   transition: background-color 0.3s ease, border-color 0.3s ease;
   position: relative;
   /* For positioning the custom checkmark */
@@ -1739,9 +1739,9 @@
 }
 
 .form-check-input:checked {
-  background-color: #c9ffff;
-  /* Light-blue background when checked */
-  border-color: #00dbda;
+  /* Dark teal so Bootstrap's white check mark shows clearly (the old light blue hid it). */
+  background-color: #0f5c4c;
+  border-color: #0f5c4c;
 }
 
 .form-check-input:checked::after {
@@ -2796,18 +2796,22 @@ $board-teal-light: #e6f2f2;
 }
 .jobs-admin-undo__close { margin-inline-start: auto; background: none; border: 0; padding: 0.4rem; }
 
-.jobs-admin-table__wrap { overflow-x: auto; border: 1px solid #ccc; border-radius: 1rem; }
+/* The wrap is the scroll box (both ways), so the header row stays frozen while the rows scroll. */
+.jobs-admin-table__wrap { overflow: auto; max-height: calc(100vh - 9rem); min-height: 16rem; border: 1px solid #ccc; border-radius: 1rem; }
 .jobs-admin-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate; // with 'collapse' the sticky header lets the rows show through its border
+  border-spacing: 0;
   font-size: 0.9375rem;
   th, td { padding: 0.6rem 0.5rem; border-bottom: 1px solid #e2e2e2; vertical-align: middle; text-align: start; }
-  thead th { background: #f3f3f3; font-family: 'RubikMediumFont', sans-serif; font-weight: normal; white-space: nowrap; position: sticky; top: 0; }
+  thead th { background: #f3f3f3; font-family: 'RubikMediumFont', sans-serif; font-weight: normal; white-space: nowrap; position: sticky; top: 0; z-index: 2; box-shadow: inset 0 -1px 0 #ccc; }
+  thead th.jobs-admin-table__flag-col { white-space: normal; text-align: center; font-size: 0.8rem; line-height: 1.2; width: 4rem; min-width: 3.75rem; padding-inline: 0.25rem; }
+  td.jobs-admin-table__flag { text-align: center; }
   tr.is-pinned { background: #fffaf0; }
   tr.is-archived { background: #f6f6f6; color: #555; }
-  .form-select-sm, .form-control-sm { min-width: 7.5rem; min-height: 2.25rem; }
+  .form-select-sm, .form-control-sm { min-width: 6.5rem; min-height: 2.25rem; }
 }
-.jobs-admin-table__job { min-width: 14rem; font-weight: normal; }
+.jobs-admin-table__job { min-width: 12rem; font-weight: normal; }
 .jobs-admin-table__title { display: block; font-family: 'RubikMediumFont', sans-serif; }
 .jobs-admin-table__meta { display: block; font-size: 0.85rem; color: #555; }
 .jobs-admin-badges { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
@@ -2818,9 +2822,10 @@ $board-teal-light: #e6f2f2;
 .jobs-admin-badge--pin { border-color: #8a5a00; color: #6b4600; background: #fff4d6; }
 .jobs-admin-badge--scheduled { border-color: #1d4ed8; color: #1e3a8a; background: #eef2ff; }
 .jobs-admin-badge--archived { border-color: #b00020; color: #8a0019; background: #fdecee; }
-.jobs-admin-pin { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; }
-.jobs-admin-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-.jobs-admin-date { display: flex; flex-direction: column; gap: 0.3rem; min-width: 9.5rem; }
+.jobs-admin-badge--imported { border-color: #6b7280; color: #374151; background: #f3f4f6; }
+.jobs-admin-lock { display: inline-flex; align-items: center; justify-content: center; width: 2.25rem; height: 2.25rem; color: #6b7280; font-size: 1.1rem; }
+.jobs-admin-actions { display: flex; flex-wrap: nowrap; gap: 0.35rem; white-space: nowrap; }
+.jobs-admin-date { display: flex; flex-direction: column; gap: 0.3rem; min-width: 8.75rem; }
 .jobs-admin-date__schedule { display: flex; gap: 0.35rem; align-items: center; font-size: 0.8rem; }
 .jobs-admin-date__error { color: #b00020; font-size: 0.8rem; }
 
@@ -2855,4 +2860,389 @@ $board-teal-light: #e6f2f2;
 
 @media (prefers-reduced-motion: reduce) {
   .jobs-admin-switch__track, .jobs-admin-switch__thumb { transition: none; }
+}
+
+// ============================================================================
+// Staff screens (security, staff users, API keys): same frame, pills and dialog
+// look as jobs management. Status is always text + icon, colour only adds to it.
+// ============================================================================
+$sec-red: #b00020;
+$sec-red-bg: #fdecee;
+$sec-amber: #8a5300;
+$sec-amber-bg: #fff4dc;
+$sec-green: #146c43;
+$sec-green-bg: #e7f5ee;
+
+// Header navigation of the staff area (AdminPanelHeader).
+.staff-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1rem; }
+.staff-nav__list { display: flex; flex-wrap: wrap; gap: 0.25rem; list-style: none; margin: 0; padding: 0; }
+.staff-nav__link {
+  display: inline-flex; align-items: center; min-height: 2.5rem; padding: 0.35rem 1rem; border-radius: 999px;
+  color: #000; text-decoration: none; font-family: 'RubikRegularFont', sans-serif; font-size: 1.1rem;
+  border: 2px solid transparent;
+  &:hover { background: $board-teal-light; color: $board-teal; }
+  &:focus-visible { outline: 3px solid #000; outline-offset: 2px; }
+  &.is-current { border-color: $board-teal; color: $board-teal; font-family: 'RubikMediumFont', sans-serif; }
+}
+.staff-nav__role {
+  font-size: 0.85rem; padding: 0.15rem 0.6rem; border-radius: 999px; background: #f2f2f2; color: #333;
+}
+
+.sec-page { padding: 1.5rem 0 3rem; }
+.sec-page__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.sec-page__head h1 { margin: 0; }
+.sec-page__sub { color: #444; margin: 0.25rem 0 0; }
+
+// Summary tiles.
+.sec-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; margin: 1.25rem 0 0.5rem; padding: 0; list-style: none; }
+.sec-tile {
+  display: flex; flex-direction: column; gap: 0.15rem; padding: 1rem 1.1rem; border-radius: 1.25rem;
+  border: 2px solid #e2e2e2; background: #fff; color: #000; text-align: start; width: 100%; font: inherit;
+  text-decoration: none;
+}
+button.sec-tile, a.sec-tile { cursor: pointer; }
+button.sec-tile:focus-visible, a.sec-tile:focus-visible { outline: 3px solid #000; outline-offset: 2px; }
+.sec-tile__num { font-family: 'RubikMediumFont', sans-serif; font-size: 2rem; line-height: 1.1; }
+.sec-tile__label { font-size: 0.95rem; }
+.sec-tile__hint { font-size: 0.8rem; color: #555; }
+.sec-tile--ok .sec-tile__num { color: $board-teal; }
+.sec-tile--warn { border-color: #f0b44c; background: $sec-amber-bg; }
+.sec-tile--warn .sec-tile__num { color: $sec-amber; }
+.sec-tile--alert { border-color: $sec-red; background: $sec-red-bg; }
+.sec-tile--alert .sec-tile__num { color: $sec-red; }
+
+// Sections as cards.
+.sec-card { border: 2px solid #000; border-radius: 1.25rem; background: #fff; padding: 1.1rem 1.25rem; margin-top: 1.25rem; }
+.sec-card__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.5rem 1rem; }
+.sec-card__head h2 { font-family: 'RubikMediumFont', sans-serif; font-size: 1.3rem; margin: 0; }
+.sec-card__hint { color: #555; margin: 0.25rem 0 0.75rem; font-size: 0.95rem; }
+.sec-empty { color: #555; margin: 0.5rem 0 0; }
+
+// "What is this?" disclosure.
+.sec-help { margin: 0.25rem 0 0.75rem; }
+.sec-help > summary {
+  display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; color: $board-teal; font-size: 0.95rem;
+  list-style: none; border-radius: 999px; padding: 0.1rem 0.4rem;
+  &::-webkit-details-marker { display: none; }
+  &:focus-visible { outline: 3px solid #000; outline-offset: 2px; }
+}
+.sec-help[open] > summary { margin-bottom: 0.35rem; }
+.sec-help__body { background: #f7f9f9; border-radius: 0.75rem; padding: 0.75rem 1rem; color: #333; font-size: 0.95rem; }
+.sec-help__body p:last-child, .sec-help__body ul:last-child { margin-bottom: 0; }
+
+// Status chips: icon + text.
+.sec-chip {
+  display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.15rem 0.65rem; border-radius: 999px;
+  font-size: 0.85rem; font-family: 'RubikMediumFont', sans-serif; white-space: nowrap; border: 1px solid transparent;
+}
+.sec-chip--ok { background: $sec-green-bg; color: $sec-green; border-color: #b7dfc9; }
+.sec-chip--warn { background: $sec-amber-bg; color: $sec-amber; border-color: #f0d199; }
+.sec-chip--alert { background: $sec-red-bg; color: $sec-red; border-color: #f1b8c1; }
+.sec-chip--muted { background: #f2f2f2; color: #444; border-color: #ddd; }
+
+// Tables that become stacked cards on a phone.
+.sec-table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+.sec-table th { text-align: start; font-family: 'RubikMediumFont', sans-serif; font-weight: normal; color: #444; padding: 0.5rem; border-bottom: 2px solid #e2e2e2; }
+.sec-table td { padding: 0.6rem 0.5rem; border-bottom: 1px solid #eee; vertical-align: middle; }
+.sec-table tr:last-child td { border-bottom: 0; }
+.sec-table .sec-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; justify-content: flex-end; }
+.sec-ltr { direction: ltr; unicode-bidi: isolate; }
+.sec-muted { color: #555; font-size: 0.85rem; }
+
+@media (max-width: 767.98px) {
+  .sec-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sec-tile__num { font-size: 1.6rem; }
+  .sec-card { padding: 1rem; border-radius: 1rem; }
+  .sec-table--stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .sec-table--stack, .sec-table--stack tbody, .sec-table--stack tr, .sec-table--stack td { display: block; width: 100%; }
+  .sec-table--stack tr { border: 1px solid #e2e2e2; border-radius: 0.9rem; padding: 0.5rem 0.75rem; margin-bottom: 0.6rem; }
+  .sec-table--stack td { border: 0; padding: 0.3rem 0; display: flex; gap: 0.75rem; justify-content: space-between; align-items: center; }
+  .sec-table--stack td[data-label]::before { content: attr(data-label); color: #555; font-size: 0.85rem; flex: 0 0 auto; }
+  .sec-table--stack td.sec-cell-main { font-family: 'RubikMediumFont', sans-serif; display: block; }
+  .sec-table--stack td { flex-wrap: wrap; }
+  .sec-table--stack td > .sec-muted { flex-basis: 100%; text-align: start; }
+  .sec-table .sec-actions { justify-content: flex-start; }
+}
+
+// Usage bars.
+.sec-meter { display: flex; align-items: center; gap: 0.5rem; min-width: 9rem; }
+.sec-meter__bar { flex: 1 1 auto; height: 0.6rem; border-radius: 999px; background: #eee; overflow: hidden; min-width: 4rem; }
+.sec-meter__fill { height: 100%; border-radius: 999px; background: $board-teal; }
+.sec-meter--warn .sec-meter__fill { background: #d98a00; }
+.sec-meter--alert .sec-meter__fill { background: $sec-red; }
+.sec-meter__text { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 0.9rem; }
+
+// Small pill buttons inside tables.
+.sec-btn {
+  display: inline-flex; align-items: center; gap: 0.3rem; min-height: 2.25rem; padding: 0.25rem 0.9rem; border-radius: 999px;
+  border: 2px solid $board-teal; background: #fff; color: $board-teal; font-family: 'RubikMediumFont', sans-serif; font-size: 0.9rem;
+  cursor: pointer; white-space: nowrap;
+  &:hover { background: $board-teal-light; }
+  &:focus-visible { outline: 3px solid #000; outline-offset: 2px; }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+.sec-btn--primary { background: $board-teal; color: #fff; &:hover { background: #00474a; } }
+.sec-btn--danger { border-color: $sec-red; color: $sec-red; &:hover { background: $sec-red-bg; } }
+
+// Alerts list.
+.sec-alerts { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
+.sec-alert {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem;
+  border: 1px solid #f1b8c1; background: $sec-red-bg; border-radius: 0.9rem; padding: 0.6rem 0.9rem;
+}
+.sec-alert__what { font-family: 'RubikMediumFont', sans-serif; }
+
+// Activity log.
+.sec-filters { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-bottom: 0.75rem; }
+.sec-filters label { display: flex; flex-direction: column; font-size: 0.85rem; color: #444; gap: 0.2rem; flex: 1 1 12rem; }
+.sec-filters .form-control, .sec-filters .form-select { border-radius: 999px; }
+.sec-log { list-style: none; margin: 0; padding: 0; }
+.sec-linkbtn { background: none; border: 0; padding: 0; color: #0b57d0; text-decoration: underline; cursor: pointer; font: inherit; }
+.sec-linkbtn:focus-visible { outline: 2px solid #0b57d0; outline-offset: 2px; }
+.sec-person { border: 2px solid #0b57d0; }
+.sec-person h2 { overflow-wrap: anywhere; }
+.sec-person__stats { list-style: none; margin: 0.5rem 0 1rem; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.sec-person__stat { background: #f3f6fb; border-radius: 999px; padding: 0.25rem 0.8rem; font-size: 0.95rem; }
+.sec-person__stat--warn { background: #fff4e0; }
+.sec-person__num { font-family: 'RubikMediumFont', sans-serif; }
+.sec-person__sub { font-size: 1.05rem; margin: 1rem 0 0.5rem; }
+.sec-log__item { display: grid; grid-template-columns: 8rem 1fr; gap: 0.25rem 1rem; padding: 0.6rem 0; border-bottom: 1px solid #eee; }
+.sec-log__when { color: #555; font-size: 0.9rem; }
+.sec-log__what { font-family: 'RubikMediumFont', sans-serif; }
+.sec-log__who { color: #333; font-size: 0.9rem; }
+.sec-log details summary { cursor: pointer; color: $board-teal; font-size: 0.85rem; }
+.sec-log pre { background: #f7f9f9; border-radius: 0.6rem; padding: 0.5rem 0.75rem; font-size: 0.8rem; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0.35rem 0 0; }
+@media (max-width: 767.98px) {
+  .sec-log__item { grid-template-columns: 1fr; }
+}
+
+// Banner message inside a card (e.g. log write failures, a new key).
+.sec-note { border-radius: 0.9rem; padding: 0.75rem 1rem; margin: 0.75rem 0 0; }
+.sec-note--alert { background: $sec-red-bg; color: #5c0011; border: 1px solid #f1b8c1; }
+.sec-note--ok { background: $sec-green-bg; color: #0c3d26; border: 1px solid #b7dfc9; }
+
+// Dialog (same as jobs-admin-dialog, a bit wider for forms).
+.sec-dialog__backdrop {
+  position: fixed; inset: 0; z-index: 2000; background: rgba(0, 0, 0, 0.45);
+  display: flex; align-items: center; justify-content: center; padding: 1rem;
+}
+.sec-dialog {
+  background: #fff; border-radius: 1.25rem; border: 2px solid #000; max-width: 34rem; width: 100%; padding: 1.5rem;
+  max-height: calc(100vh - 2rem); overflow-y: auto;
+}
+.sec-dialog__title { font-size: 1.35rem; font-family: 'RubikMediumFont', sans-serif; margin: 0 0 0.75rem; }
+.sec-dialog__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.25rem; }
+.sec-field { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.75rem; }
+.sec-field > span { font-family: 'RubikMediumFont', sans-serif; font-size: 0.95rem; }
+.sec-field .form-control, .sec-field .form-select { border-radius: 0.75rem; }
+.sec-scopes { border: 0; padding: 0; margin: 0 0 0.5rem; }
+.sec-scopes legend { font-family: 'RubikMediumFont', sans-serif; font-size: 0.95rem; margin-bottom: 0.35rem; }
+.sec-scope { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.45rem 0.6rem; border-radius: 0.75rem; border: 1px solid #e2e2e2; margin-bottom: 0.35rem; cursor: pointer; }
+.sec-scope:has(input:checked) { border-color: $board-teal; background: $board-teal-light; }
+.sec-scope input { margin-top: 0.3rem; }
+.sec-scope code { font-size: 0.85rem; }
+.sec-token { display: block; direction: ltr; overflow-wrap: anywhere; user-select: all; background: #f7f9f9; border-radius: 0.6rem; padding: 0.6rem 0.75rem; }
+
+// Staff header on a phone: logo + logout on the first line, the links in one row that scrolls sideways.
+@media (max-width: 767.98px) {
+  .staff-banner { font-size: 0.9rem; padding-inline: 0.75rem; text-align: start; }
+  .staff-banner .btn { white-space: nowrap; }
+  .staff-header { height: auto !important; padding: 0.5rem 0; }
+  .staff-header__row { flex-wrap: wrap; row-gap: 0.4rem; padding-inline: 0.75rem !important; }
+  .staff-header__row .logo { max-height: 2rem; width: auto; }
+  .staff-nav { order: 3; width: 100%; margin: 0 !important; padding: 0 !important; flex-wrap: nowrap; }
+  .staff-nav__list { flex-wrap: nowrap; overflow-x: auto; flex: 1 1 auto; scrollbar-width: none; }
+  .staff-nav__link { font-size: 1rem; min-height: 2.25rem; padding: 0.25rem 0.8rem; white-space: nowrap; }
+  .staff-nav__role { display: none; }
+}
+
+
+/* ---- Ways to apply (utils/applyPolicy.ts) ---- */
+.apply-settings__group { border: 0; padding: 0; margin: 0 0 1.25rem; }
+.apply-settings__option { margin-bottom: 0.35rem; }
+.apply-settings__option-hint { padding-inline-start: 2rem; }
+.apply-settings__radio { padding-inline-start: 0; margin-bottom: 0.1rem; }
+.self-apply-box {
+  border: 1px solid #c7d2fe; background: #f5f7ff; border-radius: 12px; padding: 0.9rem 1rem;
+}
+
+/* ---- Pin / bump and compact job settings (jobs-management, JobFlags) ---- */
+.jobs-admin-pin { display: flex; flex-wrap: nowrap; gap: 0.3rem; align-items: center; }
+.job-flags { display: flex; flex-wrap: wrap; gap: 0.35rem 1.25rem; font-size: 0.9rem; }
+.jobs-admin-table__flag .job-flag { justify-content: center; position: relative; padding: 0.35rem; }
+.jobs-admin-table__flag .job-flag input { width: 1.1rem; height: 1.1rem; }
+.jobs-admin-table__flag .job-flag__dot { position: absolute; top: 0.1rem; inset-inline-end: -0.1rem; }
+.job-flag { display: inline-flex; align-items: center; gap: 0.3rem; margin: 0; cursor: pointer; white-space: nowrap; color: #4b5563; }
+.job-flag input { width: 0.95rem; height: 0.95rem; margin: 0; accent-color: #0f5c4c; cursor: pointer; }
+.job-flag input:disabled, .job-flag input:disabled + span { cursor: not-allowed; opacity: 0.55; }
+.job-flag.is-on { color: #111827; }
+.job-flag__dot { width: 0.4rem; height: 0.4rem; border-radius: 50%; background: #c2410c; display: inline-block; }
+.job-flag input:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
+.job-card-pin {
+  display: inline-flex; align-items: center; gap: 0.25rem; margin-inline-start: auto; margin-inline-end: 0.35rem;
+  padding: 0.1rem 0.55rem; border-radius: 999px; background: #b0005f; color: #fff; font-size: 0.8rem; line-height: 1.4;
+}
+
+/* Threshold confirmation (ThresholdConfirmDialog) opens over another window (CV choice, quick application):
+   its backdrop goes above that window so it is dimmed, and the dialog above its backdrop. */
+.modal-backdrop.threshold-backdrop { z-index: 1990; }
+.modal.threshold-dialog { z-index: 2000; }
+
+// ============================================================================
+// Candidates list (/users-management, UsersManagement + UsersTable).
+// Wide screens: the page may use up to 1640px (all columns fit at 1920) (Bootstrap's container is only 720px at 768–991, 960px at 992–1199).
+// Mid widths: the table scrolls sideways inside its own box, the name stays in view (sticky).
+// Phones (< 768): one card per candidate.
+// ============================================================================
+.container:has(> .users-admin) { max-width: 1640px; }
+// Jobs, security and staff pages: the whole width up to 1400px. Bootstrap's container is only 540 / 720 / 960px at
+// 576–1199, which left wide empty strips on tablets and on phones in Chrome's "Desktop site" mode (980px wide).
+.container:has(> .jobs-admin), .container:has(> .sec-page) { max-width: 1400px; }
+.sec-page.board-frame { max-width: none; }
+.users-admin { padding-bottom: 2rem; }
+
+.users-admin__filters {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem 1.5rem;
+}
+.users-admin__search { flex: 1 1 20rem; max-width: 34rem; min-width: 0; }
+.users-admin__toggles { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 1.5rem; }
+.users-admin__toggle {
+  margin: 0 !important; gap: 0.6rem; min-height: 2.75rem;
+  .MuiFormControlLabel-label { font-family: 'RubikRegularFont', sans-serif; font-size: 1rem; white-space: nowrap; }
+}
+
+// Wider screens: one plain <table> in its own box; scrolls sideways only when it really is wider than the box.
+.users-table__scroll {
+  overflow-x: auto; border: 1px solid #d6d6d6; border-radius: 1rem; background: #fff;
+  &:focus-visible { outline: 3px solid #000; outline-offset: 2px; }
+}
+.users-table__table {
+  width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.875rem; color: #333;
+  th, td { padding: 0.55rem 0.6rem; border-bottom: 1px solid #e6e6e6; text-align: start; vertical-align: middle; white-space: nowrap; }
+  thead th {
+    background: #efefef; font-family: 'RubikMediumFont', sans-serif; font-weight: normal; color: #000;
+    position: sticky; top: 0; z-index: 2;
+  }
+  tbody tr:last-child > * { border-bottom: 0; }
+  tbody tr:hover > * { background: #ffe7ff; }
+  .btn { padding: 0.25rem 0.35rem; line-height: 1; }
+}
+// The name column: first + last name as one unit, kept in view at the right while the rest scrolls.
+.users-table__name {
+  position: sticky; inset-inline-start: 0; z-index: 1; background: #fff;
+  min-width: 9rem; max-width: 14rem; white-space: normal !important; overflow-wrap: anywhere;
+  box-shadow: inset -1px 0 0 #d6d6d6;
+}
+tbody .users-table__name { font-family: 'RubikMediumFont', sans-serif; font-weight: normal; color: #000; }
+thead .users-table__name { z-index: 3; }
+.users-table__clip { display: inline-block; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.users-table__city { max-width: 9rem; }
+.users-table__email { max-width: 17rem; }
+.users-table__icon { text-align: center !important; }
+.users-table__cv { display: inline-flex; gap: 0.1rem; }
+.users-table__empty { text-align: center !important; padding: 2rem 0 !important; color: #555; }
+.users-pager { direction: rtl; }
+.users-pager .MuiTablePagination-toolbar { padding-inline: 0.5rem; align-items: center; }
+.users-pager .MuiTablePagination-displayedRows { margin: 0; }
+@media (max-width: 767.98px) {
+  .users-pager .MuiTablePagination-toolbar { justify-content: center; }
+  .users-pager .MuiTablePagination-spacer { display: none; }
+}
+
+.users-cards__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+.users-cards__empty { padding: 1.5rem 0; text-align: center; color: #555; }
+.users-card {
+  border: 1px solid #d6d6d6; border-radius: 1rem; background: #fff; padding: 0.9rem 1rem;
+}
+.users-card__name { font-family: 'RubikMediumFont', sans-serif; font-size: 1.15rem; margin: 0 0 0.5rem; overflow-wrap: anywhere; }
+.users-card__fields {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.4rem 1rem; margin: 0;
+}
+.users-card__field { min-width: 0; }
+.users-card__field dt { font-family: 'RubikRegularFont', sans-serif; font-weight: normal; font-size: 0.8rem; color: #555; }
+.users-card__field dd { margin: 0; font-size: 0.95rem; color: #222; overflow-wrap: anywhere; }
+.users-card__field dd[dir='ltr'] { text-align: end; }
+// Email takes the whole row: addresses are long.
+.users-card__field--wide { grid-column: 1 / -1; }
+.users-card__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #eee; }
+.users-card__action {
+  display: inline-flex; align-items: center; gap: 0.4rem; min-height: 2.5rem; padding: 0.3rem 0.9rem;
+  border: 1px solid #000; border-radius: 999px; background: #fff; color: #000; font-size: 0.9rem;
+  svg { width: 1.1rem; height: 1.1rem; }
+  &:hover { background: $board-teal-light; }
+  &:focus-visible { outline: 3px solid #000; outline-offset: 2px; }
+}
+.users-card__action--danger { margin-inline-start: auto; border-color: #b00020; }
+
+// Staff header on a phone: the links wrap onto a second line instead of scrolling sideways out of sight.
+@media (max-width: 767.98px) {
+  .staff-nav__list { flex-wrap: wrap; overflow-x: visible; row-gap: 0.25rem; }
+}
+
+// Candidates list sort: header buttons (table) and the column + direction selects (phone cards).
+.users-sort-btn {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 2rem; min-height: 2rem; padding: 0;
+  border: 0; border-radius: 0.5rem; background: transparent; color: #000; font-size: 1rem;
+  &:hover { background: rgba(0, 0, 0, 0.06); }
+  &:focus-visible { outline: 3px solid #000; outline-offset: 1px; }
+}
+.users-cards__sort { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
+.users-cards__sort label { display: flex; flex-direction: column; gap: 0.2rem; flex: 1 1 0; min-width: 0; font-size: 0.85rem; color: #444; }
+.users-cards__sort label:last-child { flex: 0 0 7rem; }
+.users-cards__sort .form-select { border-radius: 0.75rem; min-height: 2.75rem; }
+
+// The installable app (docs/pwa.md): footer install option, iOS how-to, "new version" notice.
+.board-footer__link--button {
+  border: 0;
+  background: none;
+  cursor: pointer;
+
+  .bi { margin-inline-end: 0.35rem; }
+}
+
+.ios-install-steps {
+  padding-inline-start: 1.25rem;
+  line-height: 1.8;
+
+  .bi { margin-inline: 0.25rem; }
+}
+
+.pwa-update {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 1rem;
+  z-index: 1900;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: fit-content;
+  max-width: calc(100% - 2rem);
+  margin-inline: auto;
+  padding: 0.6rem 0.75rem 0.6rem 1.25rem;
+  border-radius: 999px;
+  background: #1d1d1b;
+  color: #fff;
+  font-size: 1rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.pwa-update__refresh {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.3rem 1.1rem;
+  background: #fff;
+  color: $board-teal;
+  font-family: 'RubikMediumFont', sans-serif;
+
+  &:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+}
+
+.pwa-update__close {
+  border: 0;
+  background: none;
+  color: #fff;
+  padding: 0.25rem;
+  line-height: 1;
+
+  &:focus-visible { outline: 3px solid #fff; outline-offset: 2px; border-radius: 4px; }
 }

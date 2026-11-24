@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   LIMITS, AUDIT_RETENTION_MONTHS, REVIEW, SUBMISSION_RETENTION_MONTHS, allowance, crossesAlert, countNewRows, capIds, israelDay, israelMidnight,
   reviewState, nextValidUntil, redactText, safeErrorText, isDbError, staffChangeRefusal, issuedBeforeRevoke, REVIEWED_ROLES,
+  EMPLOYER_ACCESS_DAYS, SIGNIN_ALERTS, employerWindowOpen, employerAccessUntil, forwardCancelRefusal, BUDGET_ACTIONS, GRANTABLE_BUDGETS, SEEN_ACTIONS,
 } from '../dist/security/pure.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -96,7 +97,9 @@ test('staff changes: no lock-out, no self-deactivation, known roles only', () =>
   assert.equal(r(t('user'), { kind: 'role', to: 'superuser' }, 1), 'bad_role');
   assert.equal(r(t('user'), { kind: 'role', to: 'content_manager' }, 1), null);
   assert.equal(r(t('content_manager'), { kind: 'role', to: 'content_manager' }, 1), 'no_change');
-  assert.deepEqual([...REVIEWED_ROLES].sort(), ['admin', 'content_manager']);
+  assert.equal(r(t('user'), { kind: 'role', to: 'placement_coordinator' }, 1), null);
+  assert.equal(r(t('placement_coordinator'), { kind: 'role', to: 'content_manager' }, 1), null);
+  assert.deepEqual([...REVIEWED_ROLES].sort(), ['admin', 'content_manager', 'placement_coordinator']);
 });
 
 test('revoke sessions refuses access tokens issued up to that second', () => {
@@ -109,17 +112,42 @@ test('revoke sessions refuses access tokens issued up to that second', () => {
   assert.equal(issuedBeforeRevoke(sec - 60, null), false);
 });
 
-test('the public privacy page quotes the same numbers as the code', () => {
-  const src = fs.readFileSync(path.join(here, '..', '..', 'client', 'src', 'components', 'privacy', 'PrivacyPage.tsx'), 'utf8');
-  const m = src.match(/PRIVACY_NUMBERS = (\{[^}]+\})/);
-  assert.ok(m, 'PRIVACY_NUMBERS not found');
-  const n = Function(`return ${m[1]}`)();
-  assert.deepEqual(n, {
-    cvsDaily: LIMITS.cvs.daily, cvsAlert: LIMITS.cvs.alertAt, cvsGrant: LIMITS.cvs.grant,
-    peopleDaily: LIMITS.people.daily, peopleAlert: LIMITS.people.alertAt, peopleGrant: LIMITS.people.grant,
-    retentionMonths: AUDIT_RETENTION_MONTHS, submissionRetentionMonths: SUBMISSION_RETENTION_MONTHS,
-  });
+test('the DB trigger keeps the activity log for AUDIT_RETENTION_MONTHS', () => {
   // The DB trigger hard-codes the retention too.
   const db = fs.readFileSync(path.join(here, '..', 'src', 'config', 'db.ts'), 'utf8');
   assert.ok(db.includes(`make_interval(months => ${AUDIT_RETENTION_MONTHS})`), 'trigger retention differs from AUDIT_RETENTION_MONTHS');
+});
+
+// ---- applicants forwarded to employers (docs/employers.md "Applicants") ----
+test('employer access window: open while active, closes EMPLOYER_ACCESS_DAYS after the job stopped being active', () => {
+  const now = new Date('2026-11-16T10:00:00Z');
+  const days = (n) => new Date(now.getTime() - n * 86400_000);
+  assert.equal(EMPLOYER_ACCESS_DAYS, 90);
+  assert.equal(employerWindowOpen({ status: 'Active', deletedAt: null }, null, now), true);
+  assert.equal(employerWindowOpen({ status: 'Active', deletedAt: null }, days(400), now), true, 'active again: no end');
+  assert.equal(employerAccessUntil({ status: 'Active' }, days(5)), null);
+  for (const j of [{ status: 'Closed' }, { status: 'Suspended' }, { status: 'Active', deletedAt: days(1) }]) {
+    assert.equal(employerWindowOpen(j, days(89), now), true, `${j.status} 89 days`);
+    assert.equal(employerWindowOpen(j, days(91), now), false, `${j.status} 91 days`);
+    assert.equal(employerWindowOpen(j, null, now), false, 'not active and no moment → closed');
+  }
+  assert.equal(employerAccessUntil({ status: 'Closed' }, days(10)).getTime(), days(10).getTime() + 90 * 86400_000);
+});
+
+test('a forward can be cancelled only while live and unseen', () => {
+  assert.equal(forwardCancelRefusal(null), 'forward_not_found');
+  assert.equal(forwardCancelRefusal({ cancelledAt: null, firstSeenAt: null }), null);
+  assert.equal(forwardCancelRefusal({ cancelledAt: null, firstSeenAt: new Date() }), 'forward_seen');
+  assert.equal(forwardCancelRefusal({ cancelledAt: new Date(), firstSeenAt: null }), 'forward_cancelled');
+});
+
+test('employers have their own budgets and actions, never raised, never shared with staff', () => {
+  assert.deepEqual(LIMITS.employerPeople, { daily: 200, alertAt: 100, grant: 0 });
+  assert.deepEqual(LIMITS.employerCvs, { daily: 30, alertAt: 15, grant: 0 });
+  assert.deepEqual([...GRANTABLE_BUDGETS].sort(), ['cvs', 'people']);
+  const staff = [...BUDGET_ACTIONS.cvs, ...BUDGET_ACTIONS.people];
+  for (const a of [...BUDGET_ACTIONS.employerCvs, ...BUDGET_ACTIONS.employerPeople]) {
+    assert.ok(a.startsWith('employer.') && !staff.includes(a), a);
+    assert.ok(SEEN_ACTIONS.includes(a), `${a} marks people as seen`);
+  }
 });

@@ -1,20 +1,27 @@
 import React, { useEffect, useState } from 'react';
-import { JobData } from '../models/interfaces/Props.interfaces';
+import { ApplyPolicy, JobData } from '../models/interfaces/Props.interfaces';
+import { FlagBox, jobFlagItems } from './jobsAdmin/JobFlags';
 import { JobStatus } from '../models/interfaces/General.interfaces';
 import { i18n } from '../i18n/I18n';
 import { formatDay, fromDateInput, isFutureDate, maxScheduleInput, toDateInput } from '../utils/jobBoard';
-import { CrownIcon } from '../icons';
 
 /**
  * Jobs-management table (content managers). One row per job, every board setting editable in place:
- * pin to top, status, publish date (incl. scheduling), public/private, crown (sponsored), apply-policy
- * overrides, and edit / delete (archive) / restore. Plain <table> with real controls: every control has
- * an accessible name that includes the job title; toggles are buttons with aria-pressed / role="switch".
+ * bump and pin (side by side), status (the only public/hidden switch: only Active jobs are on the site),
+ * publish date (incl. scheduling), one column per setting checkbox (sponsored, direct / quick apply, CV rules;
+ * the name is in the sticky header row, not repeated in every row), and edit / delete (archive) / restore.
+ * Plain <table> with real controls: every control has an accessible name that includes the job title.
  */
 export interface JobTableProps {
     jobs: JobData[];
     busyId?: string | null;
     onPin: (job: JobData, pinned: boolean) => void;
+    /** Bump (הקפצה): once to the top of the list (on a pinned job: above the other pins). */
+    onBump: (job: JobData) => void;
+    /** Site-wide apply defaults, so a setting equal to the default is stored as "follow the default". */
+    applyDefaults?: ApplyPolicy;
+    /** false for a placement coordinator: the apply-setting boxes are read-only (sponsored stays editable). */
+    canEditApplySettings?: boolean;
     onBoardChange: (job: JobData, values: Partial<JobData>) => Promise<boolean>;
     onEdit: (job: JobData) => void;
     onDelete: (job: JobData) => void;
@@ -24,24 +31,6 @@ export interface JobTableProps {
 const fill = (s: string, vars: Record<string, string | number>) =>
     Object.entries(vars).reduce((acc, [k, v]) => acc.replace(`{${k}}`, String(v)), s);
 
-type Tri = 'inherit' | 'on' | 'off';
-const toTri = (v: boolean | null | undefined): Tri => (v === true ? 'on' : v === false ? 'off' : 'inherit');
-const fromTri = (v: Tri): boolean | null => (v === 'on' ? true : v === 'off' ? false : null);
-
-const Switch: React.FC<{ checked: boolean; label: string; disabled?: boolean; onChange: (v: boolean) => void; children?: React.ReactNode }> = ({ checked, label, disabled, onChange, children }) => (
-    <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={label}
-        disabled={disabled}
-        className={`jobs-admin-switch ${checked ? 'is-on' : ''}`}
-        onClick={() => onChange(!checked)}
-    >
-        <span className="jobs-admin-switch__track" aria-hidden="true"><span className="jobs-admin-switch__thumb" /></span>
-        {children}
-    </button>
-);
 
 /** Publish date cell: date input + save. A future date needs the "schedule" box ticked. */
 const PublishDateCell: React.FC<{ job: JobData; disabled?: boolean; onSave: (values: Partial<JobData>) => Promise<boolean> }> = ({ job, disabled, onSave }) => {
@@ -95,7 +84,7 @@ const PublishDateCell: React.FC<{ job: JobData; disabled?: boolean; onSave: (val
     );
 };
 
-const JobTable: React.FC<JobTableProps> = ({ jobs, busyId, onPin, onBoardChange, onEdit, onDelete, onRestore }) => {
+const JobTable: React.FC<JobTableProps> = ({ jobs, busyId, onPin, onBump, applyDefaults, canEditApplySettings = true, onBoardChange, onEdit, onDelete, onRestore }) => {
     const tr = i18n.getTranslations();
     const t = tr.JobsAdmin;
     const statusLabels: Record<string, string> = {
@@ -103,6 +92,9 @@ const JobTable: React.FC<JobTableProps> = ({ jobs, busyId, onPin, onBoardChange,
         [JobStatus.SUSPENDED]: tr.Jobs.Suspended,
         [JobStatus.CLOSED]: tr.Jobs.Closed,
     };
+
+    // Column headers of the setting checkboxes (same order as each row's cells).
+    const flagHeaders = jobFlagItems({}, applyDefaults, () => undefined);
 
     if (!jobs.length) return <p className="jobs-admin__empty" role="status">{t.NoJobs}</p>;
 
@@ -116,10 +108,7 @@ const JobTable: React.FC<JobTableProps> = ({ jobs, busyId, onPin, onBoardChange,
                         <th scope="col">{t.ColJob}</th>
                         <th scope="col">{t.ColStatus}</th>
                         <th scope="col">{t.ColPublishDate}</th>
-                        <th scope="col">{t.ColPublic}</th>
-                        <th scope="col">{t.ColSponsored}</th>
-                        <th scope="col">{t.ColQuickApply}</th>
-                        <th scope="col">{t.ColNoCv}</th>
+                        {flagHeaders.map((h) => <th key={h.key} scope="col" className="jobs-admin-table__flag-col">{h.text}</th>)}
                         <th scope="col">{t.ColActions}</th>
                     </tr>
                 </thead>
@@ -129,31 +118,40 @@ const JobTable: React.FC<JobTableProps> = ({ jobs, busyId, onPin, onBoardChange,
                         const busy = busyId === id;
                         const archived = !!job.deletedAt;
                         const pinned = !!job.pinnedAt;
-                        const isPublic = job.isPublic !== false;
+                        // Imported from the existing site: read-only (the server refuses any change, 409 job_read_only).
+                        const locked = !!job.importedFromLive;
                         const scheduled = isFutureDate(job.publishDate);
                         const title = job.title;
                         return (
-                            <tr key={id} className={`${archived ? 'is-archived' : ''} ${pinned ? 'is-pinned' : ''}`} aria-busy={busy}>
+                            <tr key={id} className={`${archived ? 'is-archived' : ''} ${pinned ? 'is-pinned' : ''} ${locked ? 'is-locked' : ''}`} aria-busy={busy}>
                                 <td>
-                                    {!archived && (
+                                    {locked && (
+                                        <span className="jobs-admin-lock" title={t.ImportedHint} aria-hidden="true"><i className="bi bi-lock" /></span>
+                                    )}
+                                    {!archived && !locked && (
                                         <div className="jobs-admin-pin">
+                                            {/* Bump (הקפצה): once to the top. Pin (נעץ): stays first until unpinned. */}
+                                            <button
+                                                type="button"
+                                                className="board-pill board-pill--icon"
+                                                aria-label={`${pinned ? t.BumpPinned : t.Bump}: ${title}`}
+                                                title={pinned ? t.BumpPinned : t.Bump}
+                                                disabled={busy}
+                                                onClick={() => onBump(job)}
+                                            >
+                                                <i className="bi bi-arrow-up" aria-hidden="true" />
+                                            </button>
                                             <button
                                                 type="button"
                                                 className={`board-pill board-pill--icon ${pinned ? 'board-pill--active' : ''}`}
                                                 aria-pressed={pinned}
-                                                aria-label={`${pinned ? t.PinAgain : t.Pin}: ${title}`}
+                                                aria-label={`${t.Pin}: ${title}`}
                                                 title={pinned ? t.PinAgain : t.Pin}
                                                 disabled={busy}
-                                                onClick={() => onPin(job, true)}
+                                                onClick={() => onPin(job, !pinned)}
                                             >
                                                 <i className={`bi ${pinned ? 'bi-pin-angle-fill' : 'bi-pin-angle'}`} aria-hidden="true" />
                                             </button>
-                                            {pinned && (
-                                                <button type="button" className="jobs-admin-link" disabled={busy}
-                                                    aria-label={`${t.Unpin}: ${title}`} onClick={() => onPin(job, false)}>
-                                                    {t.Unpin}
-                                                </button>
-                                            )}
                                         </div>
                                     )}
                                 </td>
@@ -163,10 +161,11 @@ const JobTable: React.FC<JobTableProps> = ({ jobs, busyId, onPin, onBoardChange,
                                         {job.companyName}{job.location?.city ? ` · ${job.location.city}` : ''}{job.jobId ? ` · #${job.jobId}` : ''}
                                     </span>
                                     <span className="jobs-admin-badges">
-                                        {pinned && <span className="jobs-admin-badge jobs-admin-badge--pin">{fill(t.PinnedSince, { date: formatDay(job.pinnedAt) })}</span>}
-                                        {!isPublic && <span className="jobs-admin-badge" title={t.PrivateHint}>{t.Private}</span>}
+                                        {pinned && <span className="jobs-admin-badge jobs-admin-badge--pin"><i className="bi bi-pin-angle-fill" aria-hidden="true" /> {fill(t.PinnedSince, { date: formatDay(job.pinnedAt) })}</span>}
+                                        {!pinned && job.bumpedAt && <span className="jobs-admin-badge">{fill(t.BumpedSince, { date: formatDay(job.bumpedAt) })}</span>}
                                         {scheduled && <span className="jobs-admin-badge jobs-admin-badge--scheduled" title={t.ScheduledHint}>{t.Scheduled}</span>}
                                         {archived && <span className="jobs-admin-badge jobs-admin-badge--archived">{fill(t.ArchivedBy, { date: formatDay(job.deletedAt) })}</span>}
+                                        {locked && <span className="jobs-admin-badge jobs-admin-badge--imported" title={t.ImportedHint}><i className="bi bi-lock" aria-hidden="true" /> {t.Imported}</span>}
                                     </span>
                                 </th>
                                 <td>
@@ -174,67 +173,45 @@ const JobTable: React.FC<JobTableProps> = ({ jobs, busyId, onPin, onBoardChange,
                                         className="form-select form-select-sm"
                                         aria-label={fill(t.StatusLabel, { title })}
                                         value={job.status}
-                                        disabled={busy || archived}
+                                        disabled={busy || archived || locked}
                                         onChange={(e) => void onBoardChange(job, { status: e.target.value })}
                                     >
                                         {Object.entries(statusLabels).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                                     </select>
                                 </td>
-                                <td><PublishDateCell job={job} disabled={busy || archived} onSave={(v) => onBoardChange(job, v)} /></td>
-                                <td>
-                                    <Switch checked={isPublic} disabled={busy || archived}
-                                        label={fill(t.PublicLabel, { title })}
-                                        onChange={(v) => void onBoardChange(job, { isPublic: v })}>
-                                        <span className="jobs-admin-switch__text">{isPublic ? t.On : t.Private}</span>
-                                    </Switch>
-                                </td>
-                                <td>
-                                    <Switch checked={!!job.isSponsored} disabled={busy || archived}
-                                        label={fill(t.SponsoredLabel, { title })}
-                                        onChange={(v) => void onBoardChange(job, { isSponsored: v })}>
-                                        {job.isSponsored && <span className="jobs-admin-switch__crown" aria-hidden="true"><CrownIcon /></span>}
-                                    </Switch>
-                                </td>
-                                {(['quickApplyOverride', 'quickApplyWithoutCvOverride'] as const).map((field) => {
-                                    // While inheriting, the effective value IS the site default: show it.
-                                    const eff = field === 'quickApplyOverride' ? job.applyPolicy?.quickApply : job.applyPolicy?.quickApplyWithoutCv;
-                                    const inheritLabel = job[field] == null && eff !== undefined ? `${t.Inherit} (${eff ? t.On : t.Off})` : t.Inherit;
-                                    return (
-                                    <td key={field}>
-                                        <select
-                                            className="form-select form-select-sm"
-                                            aria-label={fill(field === 'quickApplyOverride' ? t.QuickApplyLabel : t.NoCvLabel, { title })}
-                                            value={toTri(job[field])}
-                                            disabled={busy || archived}
-                                            onChange={(e) => void onBoardChange(job, { [field]: fromTri(e.target.value as Tri) })}
-                                        >
-                                            <option value="inherit">{inheritLabel}</option>
-                                            <option value="on">{t.On}</option>
-                                            <option value="off">{t.Off}</option>
-                                        </select>
+                                <td><PublishDateCell job={job} disabled={busy || archived || locked} onSave={(v) => onBoardChange(job, v)} /></td>
+                                {jobFlagItems(job, applyDefaults, (patch) => void onBoardChange(job, patch)).map((item) => (
+                                    <td key={item.key} className="jobs-admin-table__flag">
+                                        <FlagBox id={`flag-${id}-${item.key}`} item={item} disabled={busy || archived || locked || (!canEditApplySettings && item.key !== 'sponsored')}
+                                            accessibleName={`${item.text}: ${title}`} showText={false} />
                                     </td>
-                                    );
-                                })}
+                                ))}
                                 <td>
                                     <div className="jobs-admin-actions">
-                                        {archived ? (
+                                        {locked ? (
+                                            <a className="board-pill board-pill--icon" href={`/job/${id}`} target="_blank" rel="noopener noreferrer"
+                                                aria-label={fill(t.ViewOnBoardLabel, { title })} title={t.ViewOnBoard}>
+                                                <i className="bi bi-box-arrow-up-left" aria-hidden="true" />
+                                            </a>
+                                        ) : archived ? (
                                             <button type="button" className="board-pill board-pill--small" disabled={busy}
                                                 aria-label={fill(t.RestoreLabel, { title })} onClick={() => onRestore(job)}>
                                                 <i className="bi bi-arrow-counterclockwise" aria-hidden="true" /> {t.Restore}
                                             </button>
                                         ) : (
                                             <>
-                                                <button type="button" className="board-pill board-pill--small" disabled={busy}
-                                                    aria-label={fill(t.EditLabel, { title })} onClick={() => onEdit(job)}>
-                                                    <i className="bi bi-pencil" aria-hidden="true" /> {t.Edit}
+                                                {/* Icon buttons (a short row); the name is in aria-label and the tooltip. */}
+                                                <button type="button" className="board-pill board-pill--icon" disabled={busy}
+                                                    aria-label={fill(t.EditLabel, { title })} title={t.Edit} onClick={() => onEdit(job)}>
+                                                    <i className="bi bi-pencil" aria-hidden="true" />
                                                 </button>
-                                                <a className="board-pill board-pill--small" href={`/job/${id}`} target="_blank" rel="noopener noreferrer"
-                                                    aria-label={fill(t.ViewOnBoardLabel, { title })}>
-                                                    <i className="bi bi-box-arrow-up-left" aria-hidden="true" /> {t.ViewOnBoard}
+                                                <a className="board-pill board-pill--icon" href={`/job/${id}`} target="_blank" rel="noopener noreferrer"
+                                                    aria-label={fill(t.ViewOnBoardLabel, { title })} title={t.ViewOnBoard}>
+                                                    <i className="bi bi-box-arrow-up-left" aria-hidden="true" />
                                                 </a>
-                                                <button type="button" className="board-pill board-pill--small board-pill--danger" disabled={busy}
-                                                    aria-label={fill(t.DeleteLabel, { title })} onClick={() => onDelete(job)}>
-                                                    <i className="bi bi-trash" aria-hidden="true" /> {t.Delete}
+                                                <button type="button" className="board-pill board-pill--icon board-pill--danger" disabled={busy}
+                                                    aria-label={fill(t.DeleteLabel, { title })} title={t.Delete} onClick={() => onDelete(job)}>
+                                                    <i className="bi bi-trash" aria-hidden="true" />
                                                 </button>
                                             </>
                                         )}

@@ -1,18 +1,21 @@
 // Funnel tracking for Google Tag Manager / GA4. See docs/analytics.md.
 //
 // - Off unless the server set GTM_ID or GA_ID (it then writes window.__ANALYTICS__).
-// - Nothing is sent until the visitor accepted analytics cookies (consent banner).
+// - Measurement needs no consent since 15.11.2026 (owner's decision): a notice says so (NoticeBanner). What is sent
+//   is still only the allowlist in analyticsPolicy.ts.
 // - Every event goes through buildEvent() (utils/analyticsPolicy.ts): only listed
 //   events and parameter keys, each value checked. No personal data, ever.
 import { useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
-  buildEvent, consentModeState, CONSENT_STORAGE_KEY, ConsentChoice, errorCodeFrom, EventName, EventParams,
+  applyErrorFromApiCode, buildEvent, consentModeState, CONSENT_STORAGE_KEY, ConsentChoice, errorCodeFrom, EventName, EventParams,
   GA_COOKIE_NAME, PARAM_CHECKS, parseConsent, sanitizePath, sanitizeReferrer, sanitizeUrl, utmFrom,
 } from './analyticsPolicy';
 import { languageStore } from '../store/Language.store';
 import { Language } from '../i18n/General.enums';
 import { i18n } from '../i18n/I18n';
+import { createApplyFlow } from './applyFlow';
+import { lastApiErrorCode } from './lastApiError';
 
 declare global {
   interface Window {
@@ -21,6 +24,8 @@ declare global {
     __ANALYTICS__?: { gtm?: boolean; ga?: boolean };
     /** Set by the server (server/src/index.ts): injects gtm.js / gtag.js. Called only after consent. */
     __skeelzLoadAnalytics?: () => void;
+    /** Set by that loader once Google's scripts were injected in this page. */
+    __skeelzAnalyticsLoaded?: boolean;
   }
 }
 
@@ -43,7 +48,8 @@ const storage = {
 let consent: ConsentChoice | null = hasWindow ? parseConsent(storage.get(CONSENT_STORAGE_KEY)) : null;
 
 export const getConsent = (): ConsentChoice | null => consent;
-export const hasAnalyticsConsent = (): boolean => !!consent?.analytics;
+/** Measurement is notice-only (no consent step): on whenever analytics is on for the site. */
+export const hasAnalyticsConsent = (): boolean => true;
 
 const gtag = (...args: unknown[]) => {
   if (!hasWindow) return;
@@ -64,6 +70,13 @@ export function setConsent(analytics: boolean) {
       window.__skeelzLoadAnalytics?.(); // Google's scripts load only now (queued events are read on load)
     } else {
       deleteGaCookies();
+      // Google's scripts were already running in this page (an earlier "yes"): they would set the cookies again.
+      // Reload once so the page starts without them (the stored "no" keeps them from loading again).
+      if (window.__skeelzAnalyticsLoaded) {
+        if (hasWindow) window.dispatchEvent(new CustomEvent(CONSENT_EVENT));
+        window.location.reload();
+        return;
+      }
     }
   }
   if (hasWindow) window.dispatchEvent(new CustomEvent(CONSENT_EVENT));
@@ -142,11 +155,22 @@ export function trackPageView() {
   track('page_view');
 }
 
+/** The URL and referrer Google may see, set again on every route change (the server sets them for the first
+ *  load, before Google's scripts). Only a dataLayer entry: nothing leaves the page without consent. */
+export function setSanitizedLocation() {
+  if (!analyticsEnabled()) return;
+  const loc = { page_location: sanitizeUrl(window.location.href), page_referrer: landingReferrer };
+  gtag('set', loc);
+  window.dataLayer = window.dataLayer || [];
+  window.dataLayer.push(loc);
+}
+
 /** Mount once inside the Router: one page_view per route change (path + kept query). */
 export function usePageViews() {
   const location = useLocation();
   useEffect(() => {
     if (!hasWindow) return;
+    setSanitizedLocation();
     if (sanitizeUrl(window.location.href) === lastPageView) return;
     trackPageView();
   }, [location.pathname, location.search]);
@@ -159,6 +183,15 @@ export function errorCode(message: unknown): string {
   return errorCodeFrom(message, dicts);
 }
 
+// ---- which SSO button brought a new identity to the sign-up form (server's ?via=) ------------
+type SsoMethod = 'google' | 'microsoft';
+let ssoMethod: SsoMethod = 'google';
+/** `via` from the redirect back (google / microsoft); anything else is ignored. */
+export const parseVia = (v: string | null): SsoMethod | null => (v === 'google' || v === 'microsoft' ? v : null);
+export function setSsoMethod(m: SsoMethod | null) { if (m) ssoMethod = m; }
+/** The `method` of a sign-up that started from SSO (`sso-signup`). */
+export const ssoSignUpMethod = (): SsoMethod => ssoMethod;
+
 // ---- "came to log in / register from an apply button" ----------------------------
 let applyContext: { jobId?: string; at: number } | null = null;
 export function setApplyContext(jobId?: string) { applyContext = { jobId, at: Date.now() }; }
@@ -168,3 +201,28 @@ export function applyContextParams(): EventParams {
   return { source: 'apply', job_id: applyContext.jobId };
 }
 export function clearApplyContext() { applyContext = null; }
+
+// ---- the apply funnel (utils/applyFlow.ts; docs/analytics.md "Apply funnel") ----------------------------
+/** One open application attempt at a time; every step event goes through track() and the allowlist. */
+export const applyFlow = createApplyFlow((name, params) => track(name, params));
+if (hasWindow) {
+  // Left the page mid-way (tab closed, navigated away). beforeunload comes before the page is hidden, so the
+  // event can still be sent; pagehide covers mobile browsers. abandon() is a no-op once the flow ended.
+  window.addEventListener('beforeunload', () => applyFlow.abandon('page_left'));
+  window.addEventListener('pagehide', () => applyFlow.abandon('page_left'));
+}
+
+/**
+ * Why the last request failed, as an analytics code: the server's code (lastApiError.ts) mapped to a readable
+ * name where we know it (jb11 → cv_required), else the code itself, else the i18n key of the message.
+ */
+export function apiErrorCode(message?: unknown): string {
+  return applyErrorFromApiCode(lastApiErrorCode()) ?? (message === undefined ? 'unknown' : errorCode(message));
+}
+
+/** Guest quick application: the form (with its CV field) is the CV step, so starting also records that step. */
+export function startGuestApply(job_id: string, cv_required: boolean, has_threshold: boolean) {
+  if (applyFlow.start({ job_id, apply_type: 'guest', apply_mode: 'quick', cv_required, has_threshold })) {
+    applyFlow.step('apply_cv_step', 'cv_step', {}, job_id);
+  }
+}

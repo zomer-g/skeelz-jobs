@@ -4,7 +4,7 @@ import { UpdateJobDto } from '../dto/updateJobDto.js';
 import { filterOptions } from '../models/interfaces/general.interface.js';
 import { Job } from '../models/schemas/jobs.js';
 import appConfig from '../config/appConfig.js';
-import * as salesforceService from './salesforceService.js'
+import { queueSalesforce } from './salesforceSync.js'
 import * as locationService from '../services/locationService.js';
 import { StringBoolean } from '../models/enums.js';
 
@@ -54,10 +54,8 @@ export const fetchJobById = async (jobId: string, opts: { withComments?: boolean
 
 export const createJob = async (createJobDto: CreateJobDTO, source: 'screen' | 'integration' = 'screen'): Promise<any> => {
   const job = await jobDAL.createJob(createJobDto, source);
-  if (appConfig.salesforce.enableSalesforce) {
-    const jobLocation = await locationService.getLocationByCitySymbol(job.citySymbol);
-    await salesforceService.createJobCase(job, jobLocation!);
-  }
+  // Salesforce (when on): queued; jobs imported from the existing site are never queued (salesforceSync.ts).
+  await queueSalesforce('job', String(job._id));
   return job;
 }
 
@@ -70,15 +68,17 @@ export const updateJobById = async (jobId: string, updateJobDto: UpdateJobDto, s
 export const updateJobByIdDetailed = async (jobId: string, updateJobDto: UpdateJobDto, source: jobDAL.UpdateSource = 'screen') => {
   const r = await jobDAL.updateJobByIdDetailed(jobId, updateJobDto, source);
   const updatedJob = r?.job;
-  if (updatedJob && appConfig.salesforce.enableSalesforce) {
-    const jobLocation = await locationService.getLocationByCitySymbol(updatedJob.citySymbol);
-    await salesforceService.updateJobCase(updatedJob, jobLocation);
-  }
+  if (updatedJob) await queueSalesforce('job', String(updatedJob._id));
   return r;
 }
 
-// Board placement (jobs-management screen). Not pushed to Salesforce: pin, visibility and archive live
-// only here (docs/jobs-management.md "Integrations").
+// Board placement (jobs-management screen). Pin and bump live only here (docs/jobs-management.md "Integrations");
+// an archive (removed from the board) and a restore reach Salesforce as the job's site status (PStatus__c Closed).
 export const setPinned = (jobId: string, pinned: boolean) => jobDAL.setPinned(jobId, pinned);
-export const setArchived = (jobId: string, archived: boolean, by: string) => jobDAL.setArchived(jobId, archived, by);
+export const bumpJob = (jobId: string) => jobDAL.bumpJob(jobId);
+export const setArchived = async (jobId: string, archived: boolean, by: string) => {
+  const job = await jobDAL.setArchived(jobId, archived, by);
+  if (job) await queueSalesforce('job', jobId);
+  return job;
+};
 export const countApplications = (jobId: string) => jobDAL.countApplications(jobId);

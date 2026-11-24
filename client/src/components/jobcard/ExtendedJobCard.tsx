@@ -14,7 +14,10 @@ import Button from "../common/Button";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import Spinner from "../common/Spinner";
 import { effectiveApplyPolicy } from "../../utils/applyPolicy";
-import { errorCode, setApplyContext, track, trackOnce } from "../../utils/analytics";
+import { DirectApplyJobCard } from "./directApplyJobCard";
+import { ThresholdConditionNote } from "../threshold/ThresholdConditionNote";
+import { applyFlow, setApplyContext, startGuestApply, track, trackOnce } from "../../utils/analytics";
+import { applyErrorText } from "../../utils/applyError";
 
 interface JobCardDataProps {
     jobData: JobData;
@@ -39,13 +42,19 @@ export const ExtendedJobCard = forwardRef<FormHandle, JobCardDataProps>(({ jobDa
     const bottomRef = useRef<HTMLDivElement | null>(null);
     const innerRef = useRef<FormHandle>(null); // ref for GuestApplyModal
     const applyPolicy = effectiveApplyPolicy(jobData);
-    // The guest form shows only when the admin policy allows applying without registering.
-    const showGuestForm = !jobData.isSelfApply && !user && applyPolicy.quickApply;
-    const cvRequired = !applyPolicy.quickApplyWithoutCv;
-    const applyType = jobData.isSelfApply ? 'self_apply' : user ? 'registered' : 'guest';
+    // Ways to apply (utils/applyPolicy.ts). The guest form shows only for guest mode 'quick';
+    // on a self-apply job everyone sees the employer's details ("apply directly to the employer").
+    const isSelfApply = applyPolicy.guestMode === 'self';
+    // A job of the existing site takes no applications here (ApplyJobButtons says so): no guest form either.
+    const showGuestForm = !user && applyPolicy.guestMode === 'quick' && !jobData.onExistingSite;
+    const cvRequired = applyPolicy.quickCv === 'required';
+    const applyType = isSelfApply && !user ? 'self_apply' : user ? 'registered' : 'guest';
     const jobKey = jobData._id?.toString();
+    const hasThreshold = !!jobData.thresholdCondition?.trim();
     useEffect(() => {
         if (jobKey) trackOnce(`job_view:${jobKey}`, 'job_view', { job_id: jobKey, source, apply_type: applyType });
+        // The job (with the guest form) was closed while an application to it was under way: abandoned there.
+        return () => { if (jobKey) applyFlow.abandon('dialog_closed', jobKey, 'quick'); };
     }, [jobKey]);
 
     const formatDateTranslations = {
@@ -55,24 +64,27 @@ export const ExtendedJobCard = forwardRef<FormHandle, JobCardDataProps>(({ jobDa
     };
 
       const handleGuestApplyJob = async (data: Guest) => {
-        const ga = { job_id: jobKey, apply_type: 'guest', cv_choice: data.cvFilePath ? 'job_only' : 'none' } as const;
-        track('apply_submit', ga);
+        // Funnel: the guest's CV choice is the file they attached (for this job only) or none. Submit, threshold,
+        // success and error are recorded by JobService (the same for every way of applying).
+        if (jobKey) {
+            startGuestApply(jobKey, cvRequired, hasThreshold);
+            applyFlow.set({ cv_choice: data.cvFilePath ? 'job_only' : 'none' }, jobKey);
+            applyFlow.step('apply_cv_choice', 'cv_choice', {}, jobKey);
+        }
         setIsLoading(true)
         const result = await JobService.getInstance().guestApplyJob(jobData,data);
         setIsLoading(false)
         if (isString(result)) {
-            track('apply_error', { job_id: jobKey, apply_type: 'guest', error_code: errorCode(result) });
             if(result === translations.AuthErrorMessages.USER_ALREADY_EXISTS){
                 setApplyContext(jobKey)
                 track('login_prompt', { job_id: jobKey, source: 'apply' })
                 setUserTryToApply(true)
                 setOpenLogin(true)
             }else{
-                showToast(result, "error");            
+                showToast(applyErrorText(result, translations.ApplyCv.ApplyFailed), "error");
             }
             return;
         } else{
-            track('apply_success', ga);
             initModal({
                 active: true,
                 modalBody: (
@@ -165,6 +177,18 @@ export const ExtendedJobCard = forwardRef<FormHandle, JobCardDataProps>(({ jobDa
                         />
                     </div>
                     <hr className="w-10 my-4" />
+                    <ThresholdConditionNote text={jobData.thresholdCondition} id={`${jobKey}`} />
+                    {/* Details content managers added to the job form and chose to show here (settings screen). Plain text. */}
+                    {jobData.extraFields && jobData.extraFields.length > 0 && (
+                        <dl className="job-extra-fields mb-3" data-testid="job-extra-fields">
+                            {jobData.extraFields.map((f, i) => (
+                                <div key={i} className="mb-2">
+                                    <dt className="font-RubikBold fs-6 d-inline">{f.label}: </dt>
+                                    <dd className="font-RubikRegular d-inline m-0" style={{ whiteSpace: 'pre-line' }}>{f.value}</dd>
+                                </div>
+                            ))}
+                        </dl>
+                    )}
                     {jobData.requiredSkillsDetails && Object.keys(jobData.requiredSkillsDetails).length > 0 &&
                         <div>
                             <h3 className=" font-RubikBold fs-5">{translations.JobCard.Skills}</h3>
@@ -189,6 +213,7 @@ export const ExtendedJobCard = forwardRef<FormHandle, JobCardDataProps>(({ jobDa
                         <GuestApplyModal
                             handleGuestApply={async (cvFilePath) => handleGuestApplyJob(cvFilePath)}
                             cvRequired={cvRequired}
+                            hasThreshold={hasThreshold}
                             jobId={jobKey}
                             ref={innerRef}
                             />
@@ -202,6 +227,7 @@ export const ExtendedJobCard = forwardRef<FormHandle, JobCardDataProps>(({ jobDa
                            { !isMobile && <GuestApplyModal
                                 handleGuestApply={async (cvFilePath) => handleGuestApplyJob(cvFilePath) }
                                 cvRequired={cvRequired}
+                                hasThreshold={hasThreshold}
                                 jobId={jobKey}
                                 // innerRef, not the outer ref: this card's own handle (below) owns the outer ref
                                 // and forwards submit() to innerRef; passing both left desktop submit a no-op.
@@ -214,8 +240,19 @@ export const ExtendedJobCard = forwardRef<FormHandle, JobCardDataProps>(({ jobDa
             </div>
         ) : (
              <div className="row pt-2 pe-3">
-                {!user && !jobData.isSelfApply && !applyPolicy.quickApply && (
+                {!user && applyPolicy.guestMode === 'none' && (
                     <p className="font-RubikMedium text-color-purple">{translations.ApplyPolicy.RegisterToApply}</p>
+                )}
+                {isSelfApply && (
+                    <section className="self-apply-box mb-3" aria-labelledby={`self-apply-${jobKey}`}>
+                        <h3 id={`self-apply-${jobKey}`} className="font-RubikBold fs-6 mb-1">
+                            <i className="bi bi-box-arrow-up-left me-1 ms-1" aria-hidden="true" />{translations.ApplyPolicy.SelfApplyTitle}
+                        </h3>
+                        <p className="font-RubikRegular fs-14 mb-2">
+                            {translations.ApplyPolicy.SelfApplyIntro}{user ? ` ${translations.ApplyPolicy.SelfApplyRegistered}` : ''}
+                        </p>
+                        <DirectApplyJobCard jobData={jobData} compact />
+                    </section>
                 )}
                 <h3 className="font-RubikBold fs-5">{translations.JobCard.JobDetails}</h3>
                 <div className="col-12">
@@ -265,6 +302,18 @@ export const ExtendedJobCard = forwardRef<FormHandle, JobCardDataProps>(({ jobDa
                         />
                     </div>
                     <hr className="w-10 my-4" />
+                    <ThresholdConditionNote text={jobData.thresholdCondition} id={`${jobKey}`} />
+                    {/* Details content managers added to the job form and chose to show here (settings screen). Plain text. */}
+                    {jobData.extraFields && jobData.extraFields.length > 0 && (
+                        <dl className="job-extra-fields mb-3" data-testid="job-extra-fields">
+                            {jobData.extraFields.map((f, i) => (
+                                <div key={i} className="mb-2">
+                                    <dt className="font-RubikBold fs-6 d-inline">{f.label}: </dt>
+                                    <dd className="font-RubikRegular d-inline m-0" style={{ whiteSpace: 'pre-line' }}>{f.value}</dd>
+                                </div>
+                            ))}
+                        </dl>
+                    )}
                     {jobData.requiredSkillsDetails && Object.keys(jobData.requiredSkillsDetails).length > 0 &&
                         <div>
                             <h3 className=" font-RubikBold fs-5">{translations.JobCard.Skills}</h3>

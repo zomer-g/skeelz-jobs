@@ -13,6 +13,8 @@ interface AuthState {
   isUserLoggedIn: () => boolean;
   setUserTryToApply: (userTryToApply: boolean) => void;
   getUserRole: () => UserRole | '';
+  /** Every role this session carries (several per account since 23.11.2026). */
+  getUserRoles: () => UserRole[];
   updateJobApplication: (jobApplicationId: string) => void; 
 }
 
@@ -42,6 +44,10 @@ const useAuthStore = create<AuthState>()(
       },
       
       getUserRole: () => get().user?.role || "",
+      getUserRoles: () => {
+        const u = get().user as any;
+        return (u?.roles?.length ? u.roles : u?.role ? [u.role] : []) as UserRole[];
+      },
       
       // Update only the new jobApplication at the user object
       updateJobApplication: (jobApplicationId: string) => {

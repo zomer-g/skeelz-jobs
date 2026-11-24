@@ -8,6 +8,10 @@
  *  Node process on xhostd, so an in-process lock is exact; if it ever runs as
  *  several processes, replace it with pg_advisory_xact_lock on a direct
  *  connection (see the app-security-baseline skill).
+ *
+ *  "The person" is the budget owner: a staff member, or for an internal API key
+ *  the staff member who issued it (its entries carry details.budget_owner), so
+ *  one person's keys and screens share one allowance and one set of alerts.
  * ========================================================================== */
 import { query, queryOne } from '../config/db.js';
 import { BUDGET_ACTIONS, Budget, LIMITS, SEEN_ACTIONS, crossesAlert, israelDay, israelMidnight } from './pure.js';
@@ -40,7 +44,8 @@ export const dailyUsage = async (who: string, budget: Budget, now = new Date()):
   const [u, g] = await Promise.all([
     queryOne<{ n: number }>(
       `SELECT COALESCE(SUM(CASE WHEN details ? 'count' THEN (details->>'count')::int ELSE 0 END), 0)::int AS n
-         FROM audit_log WHERE actor = $1 AND at >= $2 AND action = ANY($3)`,
+         FROM audit_log WHERE (actor = $1 OR details @> jsonb_build_object('budget_owner', $1::text))
+          AND at >= $2 AND action = ANY($3)`,
       [who, since, BUDGET_ACTIONS[budget]]
     ),
     queryOne<{ n: number }>(
@@ -56,7 +61,8 @@ export const dailyUsage = async (who: string, budget: Budget, now = new Date()):
 export const seenToday = async (who: string, now = new Date()): Promise<Set<string>> => {
   const rows = await query<{ id: string }>(
     `SELECT DISTINCT jsonb_array_elements_text(details->'ids') AS id FROM audit_log
-      WHERE actor = $1 AND at >= $2 AND action = ANY($3) AND details ? 'ids'`,
+      WHERE (actor = $1 OR details @> jsonb_build_object('budget_owner', $1::text))
+        AND at >= $2 AND action = ANY($3) AND details ? 'ids'`,
     [who, israelMidnight(israelDay(now)), SEEN_ACTIONS]
   );
   return new Set(rows.map((r) => r.id));
@@ -85,16 +91,22 @@ export const afterSpend = async (who: string, budget: Budget, usedBefore: number
 
 /** At the wall: alert "wants more" once a day, one refusal entry per place a day. */
 const refusalsLogged = new Set<string>();
-export const atLimit = async (who: string, budget: Budget, place: string, usage: Usage) => {
-  await raiseAlert(`${budget}_limit`, who, usage.allowed, { used: usage.used, place });
-  const k = `${usage.day}|${who}|${budget}|${place}`;
+export const atLimit = async (who: string, budget: Budget, place: string, usage: Usage, via?: string) => {
+  const viaPart = via && via !== who ? { via } : {};
+  await raiseAlert(`${budget}_limit`, who, usage.allowed, { used: usage.used, place, ...viaPart });
+  const k = `${usage.day}|${who}|${budget}|${place}|${via ?? ''}`;
   if (!refusalsLogged.has(k)) {
     refusalsLogged.add(k);
-    void writeAudit(who, 'limits.refused', place, { budget, used: usage.used, allowed: usage.allowed });
+    void writeAudit(who, 'limits.refused', place, { budget, used: usage.used, allowed: usage.allowed, ...viaPart });
   }
 };
 
-export const limitMessage = (budget: Budget) =>
-  budget === 'cvs'
-    ? `הגעת למגבלה היומית של ${LIMITS.cvs.daily} קורות חיים. מנהל מערכת קיבל התראה ויכול לאשר עוד ${LIMITS.cvs.grant}.`
-    : `הגעת למגבלה היומית של ${LIMITS.people.daily} מועמדים שהוצגו. מנהל מערכת קיבל התראה ויכול לאשר עוד ${LIMITS.people.grant}.`;
+export const limitMessage = (budget: Budget) => {
+  switch (budget) {
+    case 'cvs': return `הגעת למגבלה היומית של ${LIMITS.cvs.daily} קורות חיים. מנהל מערכת קיבל התראה ויכול לאשר עוד ${LIMITS.cvs.grant}.`;
+    case 'people': return `הגעת למגבלה היומית של ${LIMITS.people.daily} מועמדים שהוצגו. מנהל מערכת קיבל התראה ויכול לאשר עוד ${LIMITS.people.grant}.`;
+    // Employers: no grants; the limit resets at midnight (Israel time).
+    case 'employerCvs': return `הגעתם למגבלה היומית של ${LIMITS.employerCvs.daily} קורות חיים. אפשר לפתוח עוד מחר, או לפנות לצוות SKEELZ.`;
+    case 'employerPeople': return `הגעתם למגבלה היומית של ${LIMITS.employerPeople.daily} מועמדים שהוצגו. אפשר לראות עוד מחר, או לפנות לצוות SKEELZ.`;
+  }
+};

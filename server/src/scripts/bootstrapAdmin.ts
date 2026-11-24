@@ -27,7 +27,12 @@ export const bootstrapAdmin = async () => {
   await migrate();
   const existing = await queryOne<{ id: string }>(`SELECT id FROM users WHERE lower(email) = $1`, [email]);
   if (existing) {
-    await query(`UPDATE users SET role = 'admin' WHERE id = $1`, [existing.id]);
+    // Promoting a non-staff account clears its password: staff sign in only with SSO, and a candidate's old
+    // password (which someone else may know) must not stay on an admin account.
+    await query(
+      `UPDATE users SET password = CASE WHEN role IN ('admin', 'content_manager', 'placement_coordinator') THEN password ELSE '' END,
+                        sessions_revoked_at = CASE WHEN role IN ('admin', 'content_manager', 'placement_coordinator') THEN sessions_revoked_at ELSE now() END,
+                        role = 'admin' WHERE id = $1`, [existing.id]);
     if (password && process.env.ADMIN_RESET_PASSWORD === 'true') {
       await query(`UPDATE users SET password = $1 WHERE id = $2`, [await hashPassword(password), existing.id]);
       console.log('[admin] password reset');

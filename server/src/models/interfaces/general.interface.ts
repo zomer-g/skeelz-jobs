@@ -13,7 +13,6 @@ export interface filterOptions {
     jobStatus?: string[];
     isSponsored?: boolean;
     /** Jobs-management filters (jobBoard.ts BoardFilters); ignored by public lists. */
-    visibility?: 'public' | 'private';
     pinned?: boolean | string;
     archived?: 'only' | 'include';
     scheduled?: boolean | string;
@@ -32,6 +31,8 @@ export interface usersFilter {
     limit?: number;
     hasCv?: boolean;
     hasApplied?: boolean;
+    /** Marketing mail state (security/marketing.ts): agreed / not_agreed / removed / unknown. */
+    marketing?: string;
 }
 
 export interface Guest {
@@ -52,13 +53,10 @@ export interface LoginResponse {
 export interface IAuthJwtPayload {
     userID: string;
     userRole: string;
-    /** How the session was made (password | xhostd). Staff sessions must be xhostd (security/pure.ts). */
+    /** The roles this session carries (several per account since 23.11.2026; staff roles only on xhostd SSO). */
+    userRoles?: string[];
+    /** How the session was made (xhostd | email_code; 'password' on sessions from before 11.2026). Staff sessions must be xhostd (security/pure.ts). */
     via?: string;
-}
-
-export interface IPasswordResetJwtPayload {
-    userID: string;
-    isPasswordUninitialized?: boolean;
 }
 
 export interface IAuthRequest extends Request {

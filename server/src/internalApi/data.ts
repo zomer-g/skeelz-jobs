@@ -44,7 +44,7 @@ const CANDIDATE_SELECT = `
 /** Candidates (role user only), newest change first. */
 export const listCandidates = async (f: { search?: string; hasCv?: boolean; updatedSince?: Date; page: number; limit: number; offset: number }) => {
   const params: any[] = [];
-  const where = [`u.role = 'user'`];
+  const where = [`'user' = ANY(u.roles)`];
   const search = f.search?.trim();
   if (search) {
     params.push(`%${escapeLike(search)}%`);
@@ -67,14 +67,14 @@ export const listCandidates = async (f: { search?: string; hasCv?: boolean; upda
 export const getCandidate = async (id: string): Promise<CandidateOut | null> => {
   if (!isObjectId(id)) return null;
   const r = await queryOne(`SELECT ${CANDIDATE_SELECT} FROM users u LEFT JOIN locations l ON l.city_symbol = u.city_symbol
-                             WHERE u.id = $1 AND u.role = 'user'`, [id]);
+                             WHERE u.id = $1 AND 'user' = ANY(u.roles)`, [id]);
   return r ? toCandidate(r) : null;
 };
 
 /** The storage key of a candidate's profile CV ('' = none). Server-side only. */
 export const candidateCvKey = async (id: string): Promise<string> => {
   if (!isObjectId(id)) return '';
-  const r = await queryOne<{ k: string }>(`SELECT cv_file_url AS k FROM users WHERE id = $1 AND role = 'user'`, [id]);
+  const r = await queryOne<{ k: string }>(`SELECT cv_file_url AS k FROM users WHERE id = $1 AND 'user' = ANY(roles)`, [id]);
   return r?.k ?? '';
 };
 

@@ -22,6 +22,8 @@ import { S3Folder } from "../models/enums.js";
 import { isEnglishString } from "../utils/utils.js";
 import { query, queryOne } from "../config/db.js";
 import { BlobClient } from "./blobClient.js";
+import { uploadRef, writeAudit } from "../security/audit.js";
+import { isSfCvKey, openSfCv, sfCvInfo } from "./legacyCvs.js";
 
 const BUCKET = process.env.S3_BUCKET || '';
 const useS3 = !!(process.env.S3_ENDPOINT && BUCKET);
@@ -102,7 +104,7 @@ export const uploadFileToS3 = async (fileBufferBefore: Buffer, fileType: string,
   try {
     await putObject(key, fileBuffer, mimeType);
     await query(`INSERT INTO cv_uploads (key) VALUES ($1) ON CONFLICT (key) DO NOTHING`, [key]);
-    return { fileUrl: key, fileName };
+    return { fileUrl: key, fileName, size: fileBuffer.length };
   } catch (error) {
     console.error('[storage] upload failed', (error as Error).message);
     throw new AxiosError(FilesErrorMessages.FAILED_TO_UPLOAD_FILE_S3, FilesErrorCodes.FAILED_TO_UPLOAD_FILE_S3);
@@ -113,18 +115,33 @@ export const uploadFileToS3 = async (fileBufferBefore: Buffer, fileType: string,
  * Attaches a pending upload to an owner (user id or guest application id).
  * Returns the canonical key, or '' when the value is empty/unknown/already taken.
  */
-export const claimCvUpload = async (value: string | undefined | null, ownerId: string): Promise<string> => {
+export const claimCvUpload = async (value: string | undefined | null, ownerId: string, audit?: CvAttachAudit): Promise<string> => {
   const key = normalizeCvKey(value);
   if (!key) return '';
   const rows = await query(`UPDATE cv_uploads SET claimed_by = $2 WHERE key = $1 AND claimed_by IS NULL RETURNING key`, [key, ownerId]);
-  return rows.length ? key : '';
+  if (!rows.length) return '';
+  // Every CV that becomes someone's is on record: whose (id), how, and which upload (a hash, never the key or name).
+  if (audit) {
+    void writeAudit(audit.actor ?? `user:${ownerId}`, 'cv.attached', ownerId,
+      { upload: uploadRef(key), via: audit.via, ...(audit.kind === 'guest' ? { guest: true } : {}) });
+  }
+  return key;
 };
+
+/** Who attached the CV and where (sign-up, personal area, staff edit, application, guest application). */
+export type CvAttachAudit = { via: 'signup' | 'profile' | 'staff_edit' | 'application' | 'guest_application'; actor?: string; kind?: 'user' | 'guest' };
+
+/** Belt and braces on top of "unclaimed": a key that any profile, application or guest application points to is
+ *  a submitted file and is never deleted. */
+const NOT_SUBMITTED = (keyExpr: string) => `NOT EXISTS (SELECT 1 FROM users u WHERE u.cv_file_url = ${keyExpr})
+  AND NOT EXISTS (SELECT 1 FROM job_applications a WHERE a.cv_file_url = ${keyExpr})
+  AND NOT EXISTS (SELECT 1 FROM guest_applications g WHERE g.cv_key = ${keyExpr})`;
 
 /** Anonymous cancel of an upload the visitor just made (only while nobody owns it). */
 export const deletePendingUpload = async (value: string): Promise<boolean> => {
   const key = normalizeCvKey(value);
   if (!key) return false;
-  const rows = await query(`DELETE FROM cv_uploads WHERE key = $1 AND claimed_by IS NULL RETURNING key`, [key]);
+  const rows = await query(`DELETE FROM cv_uploads WHERE key = $1 AND claimed_by IS NULL AND ${NOT_SUBMITTED('cv_uploads.key')} RETURNING key`, [key]);
   if (!rows.length) return false;
   await deleteObject(key);
   return true;
@@ -138,6 +155,8 @@ export interface StoredFile {
 }
 
 export const getStoredFile = async (fileKey: string): Promise<StoredFile> => {
+  // A candidate of the existing site: the CV stays in Salesforce and is opened from there (services/legacyCvs.ts).
+  if (isSfCvKey(fileKey)) return openSfCv(fileKey);
   const key = normalizeCvKey(fileKey);
   if (!key) throw new AxiosError(FilesErrorMessages.INVALID_S3_KEY_FORMAT, FilesErrorCodes.INVALID_S3_KEY_FORMAT);
   const fileName = key.split('/').pop() || 'cv-file';
@@ -165,7 +184,7 @@ export const purgeStaleUploads = async (): Promise<number> => {
   const rows = await query<{ key: string }>(
     `DELETE FROM cv_uploads WHERE key IN (
        SELECT key FROM cv_uploads WHERE claimed_by IS NULL AND created_at < now() - make_interval(hours => $1) LIMIT 500
-     ) AND claimed_by IS NULL RETURNING key`,
+     ) AND claimed_by IS NULL AND ${NOT_SUBMITTED('cv_uploads.key')} RETURNING key`,
     [hours]
   );
   for (const { key } of rows) {
@@ -179,6 +198,7 @@ export const purgeStaleUploads = async (): Promise<number> => {
  * uploadedAt is null for CVs imported from the old system (no upload record).
  */
 export const getCvUploadInfo = async (value: string | undefined | null): Promise<{ fileName: string; uploadedAt: Date | null } | null> => {
+  if (isSfCvKey(value)) return sfCvInfo(value);
   const key = normalizeCvKey(value);
   if (!key) return null;
   const row = await queryOne<{ created_at: Date }>(`SELECT created_at FROM cv_uploads WHERE key = $1`, [key]);
@@ -188,14 +208,5 @@ export const getCvUploadInfo = async (value: string | undefined | null): Promise
 /** Kept for the Salesforce CV upload. */
 export const getFileFromS3 = async (fileKey: string): Promise<Readable> => (await getStoredFile(fileKey)).stream;
 
-/** Admin delete of a stored CV (any state). */
-export async function deleteFileAndFolderInS3(cvPath: string): Promise<void> {
-  const key = normalizeCvKey(cvPath);
-  if (!key) throw new AxiosError(FilesErrorMessages.INVALID_S3_KEY_FORMAT, FilesErrorCodes.INVALID_S3_KEY_FORMAT);
-  try {
-    await deleteObject(key);
-    await query(`DELETE FROM cv_uploads WHERE key = $1`, [key]);
-  } catch (error) {
-    throw new AxiosError(FilesErrorMessages.FAILED_TO_DELETE_FILE_OR_FOLDER_S3, FilesErrorCodes.FAILED_TO_DELETE_FILE_OR_FOLDER_S3);
-  }
-}
+// There is no "delete a stored CV" any more: a file that reached a profile or an application is kept for good
+// (owner's rule). Only unclaimed uploads go (deletePendingUpload, purgeStaleUploads).

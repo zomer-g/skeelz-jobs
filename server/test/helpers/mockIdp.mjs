@@ -1,5 +1,5 @@
 // A mock identity provider for tests: OIDC discovery, JWKS, a token endpoint (authorization code + PKCE),
-// and minting of xhostd-style identity cookies. Keys are generated per run; nothing here is a real secret.
+// and minting of xhostd-style identity cookies. Also serves the Microsoft identity platform paths (e2e-microsoft-sso). Keys are generated per run; nothing here is a real secret.
 //
 //   const idp = await startMockIdp({ port: 3199 });
 //   idp.issuer, idp.jwksUrl
@@ -43,8 +43,9 @@ export const startMockIdp = async ({ port = 0, host = '127.0.0.1' } = {}) => {
         id_token_signing_alg_values_supported: ['RS256'],
       });
     }
-    if (url.pathname === '/jwks' || url.pathname === '/xhost-auth/jwks') return json(200, { keys: [jwk] });
-    if (url.pathname === '/token' && req.method === 'POST') {
+    // Also Microsoft's paths (MS_LOGIN_BASE = this mock): /common/discovery/v2.0/keys and /common/oauth2/v2.0/token.
+    if (url.pathname === '/jwks' || url.pathname === '/xhost-auth/jwks' || url.pathname === '/common/discovery/v2.0/keys') return json(200, { keys: [jwk] });
+    if ((url.pathname === '/token' || url.pathname === '/common/oauth2/v2.0/token') && req.method === 'POST') {
       let raw = '';
       for await (const c of req) raw += c;
       const p = new URLSearchParams(raw);

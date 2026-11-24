@@ -14,20 +14,26 @@ import Label from '../common/Label';
 import DateInput from '../common/DateInput';
 import SelectAutocomplete from '../common/SelectAutocomplete';
 import UploadFileArea from '../common/UploadFileArea';
+import { DEFAULT_SIGNUP_FIELDS, SignupFields, israeliIdOk } from '../../utils/signupFields';
+import CustomFieldInputs from '../common/CustomFieldInputs';
+import { customErrors, FormField } from '../../utils/customFields';
 
 interface UserDetailsProps {
   formikRef?: React.MutableRefObject<FormikProps<RegisterFormValues> | null>;
   handleSubmit: (values: RegisterFormValues) => void;
   initialData: RegisterFormValues;
-  /** No password section (sign-up after "Continue with Google", or editing one's own details). */
-  noPassword?: boolean;
   /** Email shown but not editable, with this explanation under it. */
   emailReadOnlyHint?: string;
   /** Text above the CV upload (e.g. "you already have a CV"). */
   cvHint?: string;
+  /** Which fields are required / optional / hidden (the admins' setting; the server enforces the same). */
+  fields?: SignupFields;
+  /** The questions content managers added (settings screen); the server checks the same. */
+  customFields?: FormField[];
 }
 
-export const UserDetails: React.FC<UserDetailsProps> = ({ initialData, formikRef, handleSubmit, noPassword, emailReadOnlyHint, cvHint }) => {
+export const UserDetails: React.FC<UserDetailsProps> = ({ initialData, formikRef, handleSubmit, emailReadOnlyHint, cvHint, fields = DEFAULT_SIGNUP_FIELDS, customFields = [] }) => {
+  const req = (f: keyof SignupFields) => fields[f] === 'required';
   const [locations, setLocations] = useState<Record<number, string>>({});
   const { showToast } = useToastStore();
   const translations = i18n.getTranslations();
@@ -63,13 +69,18 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ initialData, formikRef
       firstName: initialData.firstName || '',
       lastName: initialData.lastName || '',
       dateOfBirth: initialData.dateOfBirth,
+      idNumber: initialData.idNumber || '',
       phoneNumber: initialData.phoneNumber || '',
       citySymbol: initialData.citySymbol || 0,
-      password: initialData.password || '',
-      confirmPassword: initialData.confirmPassword || '',
       skills: initialData.skills || [],
       cvFileUrl: initialData.cvFileUrl || '',
       hasAppliedToJob: false,
+      customFields: { ...(initialData.customFields ?? {}) },
+    },
+    // The added questions (runs together with the schema below).
+    validate: (values) => {
+      const e = customErrors(customFields, values.customFields);
+      return Object.keys(e).length ? ({ customFields: e } as any) : {};
     },
     validationSchema: Yup.object({
       email: Yup.string()
@@ -87,48 +98,26 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ initialData, formikRef
         .matches(/^[^0-9]*$/, translations.Inputs.InvalidFirstName)
         .min(2, translations.Inputs.InvalidFirstName)  // Minimum length of 2
         .max(30, translations.Inputs.InvalidFirstName),  // Maximum length of 30
-        dateOfBirth: Yup.date()
-        .required(translations.Inputs.Required)
+      // Birth date from three dropdowns: an Invalid Date means only some were chosen.
+      dateOfBirth: (req('dateOfBirth') ? Yup.date().required(translations.Inputs.Required) : Yup.date().nullable())
+        .typeError(translations.Inputs.IncompleteDate)
         .max(new Date(), translations.Inputs.InvalidDate)
-        .min(new Date(new Date().setFullYear(new Date().getFullYear() - 120)), translations.Inputs.InvalidDate)
-        .typeError(translations.Inputs.InvalidDate) // Ensures that the error message is shown for invalid date types
-      ,
-      phoneNumber: Yup.string()
-        .matches(/^\d+$/, translations.Inputs.InvalidPhoneNumber) // Ensure only digits are allowed
+        .min(new Date(new Date().setFullYear(new Date().getFullYear() - 120)), translations.Inputs.InvalidDate),
+      idNumber: fields.idNumber === 'hidden' ? Yup.string().notRequired() : (req('idNumber') ? Yup.string().required(translations.Inputs.Required) : Yup.string())
+        .test('israeli-id', translations.Inputs.InvalidIdNumber, (v) => !v || israeliIdOk(v)),
+      phoneNumber: (req('phoneNumber') ? Yup.string().required(translations.Inputs.Required) : Yup.string())
+        .matches(/^\d*$/, translations.Inputs.InvalidPhoneNumber) // Ensure only digits are allowed
         .test('valid-phone', translations.Inputs.InvalidPhoneNumber, (value) => {
-          if (value) {
-            // Remove leading zeros only if the number starts with '05' (mobile number prefix)
-            let strippedValue = value.replace(/^0+/, '');
-
-            // If the number is mobile (starts with '05'), we strip the leading zero
-            // For landlines, do not strip the leading zero
-            if (strippedValue.startsWith('5') && strippedValue.length === 9) {
-              // This is a mobile number
-              return /^5\d{8}$/.test(strippedValue); // Mobile pattern: 05xxxxxxxx
-            }
-
-            // For landline numbers (02, 03, 04, 08, 09)
-            return /^(02|03|04|08|09)\d{7}$/.test(value); // Landline pattern: 02xxxxxxx, 03xxxxxxx, etc.
-          }
-          return false;
-        })
-        .required(translations.Inputs.Required),
-      citySymbol: Yup.string().required(translations.Inputs.Required),
-      gender: Yup.string()
-        .oneOf(Object.values(Gender), 'Invalid gender') 
-        .required(translations.Inputs.Required),
-      ...(noPassword ? {} : {
-      password: Yup.string()
-        .matches(/^[A-Za-z0-9]+$/, translations.PasswordRequirements.OnlyLettersNumbers)
-        .min(8, translations.PasswordRequirements.MinLength)
-        .matches(/[a-z]/, translations.PasswordRequirements.Lowercase)
-        .matches(/[A-Z]/, translations.PasswordRequirements.Uppercase)
-        .matches(/\d/, translations.PasswordRequirements.Number)
-        .required(translations.Inputs.Required),
-      confirmPassword: Yup.string()
-        .oneOf([Yup.ref('password')], translations.PasswordRequirements.MustMatch)
-        .required(translations.Inputs.Required),
-      }),
+          if (!value) return !req('phoneNumber');
+          // Mobile: 05x + 7 digits (leading zeros stripped); landline: 02/03/04/08/09 + 7 digits.
+          const strippedValue = value.replace(/^0+/, '');
+          if (strippedValue.startsWith('5') && strippedValue.length === 9) return /^5\d{8}$/.test(strippedValue);
+          return /^(02|03|04|08|09)\d{7}$/.test(value);
+        }),
+      citySymbol: Yup.mixed().test('city', translations.Inputs.Required, (v) => !req('citySymbol') || Number(v) > 0),
+      gender: req('gender')
+        ? Yup.string().oneOf(Object.values(Gender), 'Invalid gender').required(translations.Inputs.Required)
+        : Yup.string().nullable().oneOf([...Object.values(Gender), null, undefined, ''] as any[], 'Invalid gender'),
       // cvFileUrl: Yup.string()
       // .required(translations.Inputs.CVRequired),
     }),
@@ -197,18 +186,18 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ initialData, formikRef
           <div className="row">
             <div className="col-md-4 px-2">
               <DateInput
-                required
+                required={req('dateOfBirth')}
                 label={translations.Register.DateOfBirth}
                 value={formik.values.dateOfBirth}
-                onChange={(date) => formik.setFieldValue('dateOfBirth', date)}
-                 name={''} 
-                 error={formik.touched.dateOfBirth && formik.errors.dateOfBirth ? formik.errors.dateOfBirth : ''}
-                 />
+                onChange={(date) => { formik.setFieldTouched('dateOfBirth', true, false); formik.setFieldValue('dateOfBirth', date); }}
+                name="dateOfBirth"
+                error={formik.touched.dateOfBirth && formik.errors.dateOfBirth ? String(formik.errors.dateOfBirth) : ''}
+              />
             </div>
 
             <div className="col-md-4   px-2">
               <TextInput
-                required
+                required={req('phoneNumber')}
                 label={translations.Register.PhoneNumber}
                 type="tel"
                 name="phoneNumber"
@@ -222,7 +211,7 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ initialData, formikRef
 
             <div className="col-md-4   px-2">
               <SelectAutocomplete
-                required
+                required={req('citySymbol')}
                 label={translations.Register.City}
                 name="citySymbol"
                 value={formik.values.citySymbol} 
@@ -234,9 +223,33 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ initialData, formikRef
             </div>
           </div>
 
+          {/* ID number (תעודת זהות): shown unless the setting hides it; never sent to analytics or logs. */}
+          {fields.idNumber !== 'hidden' && (
+            <div className="row mt-3">
+              <div className="col-md-4 px-2">
+                <TextInput
+                  required={req('idNumber')}
+                  label={translations.Register.IdNumber}
+                  name="idNumber"
+                  id="idNumber"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={9}
+                  placeholder=""
+                  value={formik.values.idNumber}
+                  onChange={(e) => formik.setFieldValue('idNumber', e.target.value.replace(/\D/g, '').slice(0, 9))}
+                  onBlur={formik.handleBlur}
+                  aria-describedby="idNumber-hint"
+                  error={formik.touched.idNumber && formik.errors.idNumber ? formik.errors.idNumber : ''}
+                />
+                <small id="idNumber-hint" className="font-RubikRegular text-color-dark-grey d-block px-3">{translations.Register.IdNumberHint}</small>
+              </div>
+            </div>
+          )}
+
           {/* Gender */}
           <div className="mb-3 px-2 pb-4">
-            <Label required htmlFor={'gender'} className="font-RubikRegular mb-0 pt-2 ps-3 pb-1">{translations.Register.Gender}</Label>
+            <Label required={req('gender')} htmlFor={'gender'} className="font-RubikRegular mb-0 pt-2 ps-3 pb-1">{translations.Register.Gender}</Label>
             <div className="d-flex">
               <CustomRadio
                 name="gender"
@@ -263,6 +276,21 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ initialData, formikRef
             <FieldErrorMessage error={formik.touched.gender && formik.errors.gender ? formik.errors.gender : ''} />
           </div>
 
+          {/* Questions added by content managers (settings screen). */}
+          {customFields.length > 0 && (
+            <div className="mt-2">
+              <CustomFieldInputs
+                fields={customFields}
+                values={formik.values.customFields}
+                idPrefix="signup"
+                errors={formik.submitCount > 0 ? ((formik.errors as any).customFields ?? {}) : {}}
+                requiredText={translations.Inputs.Required}
+                invalidText={translations.Inputs.InvalidValue}
+                onChange={(id, value) => formik.setFieldValue('customFields', { ...(formik.values.customFields ?? {}), [id]: value })}
+              />
+            </div>
+          )}
+
           {/* Upload CV File */}
           {cvHint && <p className="font-RubikRegular text-color-dark-grey px-3 mb-1">{cvHint}</p>}
           <UploadFileArea 
@@ -275,53 +303,6 @@ export const UserDetails: React.FC<UserDetailsProps> = ({ initialData, formikRef
           
         </div>
 
-        {/* Last Row: Password and Confirm Password */}
-
-        {!noPassword && <div className='m-3 mt-4 py-3'>
-          <div className="d-flex align-items-center">
-            <h2 className="font-RubikBold pe-3 ps-1 fs-1-25rem mb-1">{translations.Register.ChoosePassword}</h2>
-            <span className="font-RubikRegular text-dark fs-1-25rem mb-1 d-none d-sm-block">(שימו לב שהסיסמה עומדת בכל התנאים)</span>
-          </div>
-          <div className='px-3'>
-            <span className="font-RubikRegular text-color-dark-grey pb-4 fs-1-125rem">
-            {translations.Register.ChoosePasswordRole}
-          </span>
-          </div>
-          
-
-          <div className="row mt-4 py-2">
-            <div className="col-md-4 height-6-6rem px-2">
-              <TextInput
-                required
-                label={translations.Register.Password}
-                type="password"
-                name="password"
-                placeholder={translations.Register.Password}
-                value={formik.values.password}
-                onChange={formik.handleChange}
-                onBlur={formik.handleBlur}
-                error={formik.touched.password && formik.errors.password ? formik.errors.password : ''}
-              />
-            </div>
-            <div className="col-md-4 height-6-6rem px-2">
-              <TextInput
-                required
-                label={translations.Register.ConfirmPassword}
-                type="password"
-                name="confirmPassword"
-                placeholder={translations.Register.ConfirmPassword}
-                value={formik.values.confirmPassword}
-                onChange={formik.handleChange}
-                onBlur={formik.handleBlur}
-                error={
-                  formik.touched.confirmPassword && formik.errors.confirmPassword
-                    ? formik.errors.confirmPassword
-                    : ''
-                }
-              />
-            </div>
-          </div>
-        </div>}
       </form>
     </div>
   );

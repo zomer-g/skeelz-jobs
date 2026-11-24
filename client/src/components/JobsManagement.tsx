@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { JobStatus } from '../models/interfaces/General.interfaces';
-import { JobData, filterOptions } from '../models/interfaces/Props.interfaces';
+import { ApplyPolicy, JobData, filterOptions } from '../models/interfaces/Props.interfaces';
+import SettingsService from '../services/api/Settings.service';
 import { JobService } from '../services/api/Job.service';
 import { isString } from '../utils/utils';
 import useModalStore from '../store/Modal.store';
@@ -8,16 +9,16 @@ import { i18n } from '../i18n/I18n';
 import JobTable, { fill } from './JobTable';
 import useToastStore from '../store/Toast.store';
 import CreateOrEditJobContainer from './CreateOrEditJobContainer';
-import ApplyPolicySettings from './applyPolicy/ApplyPolicySettings';
 import { useNavigate } from 'react-router-dom';
 import { ClientRoutes } from '../i18n/ClientRoutes.enum';
-import ApiTokens from './security/ApiTokens';
 import ConfirmDialog from './jobsAdmin/ConfirmDialog';
+import useAuthStore from '../store/Auth.store';
+import { canManageContent } from '../i18n/General.enums';
 
 /**
  * /jobs-management (content managers only; server gates: contentManagerOnly). One screen for jobs:
- * search + filters, and per job: pin to top, status, publish date, public/private, crown, apply-policy
- * overrides, edit, delete (archive, with undo) and restore. Rules: docs/jobs-management.md.
+ * search + filters, and per job: bump (once to the top), pin (stays first), status, publish date, and compact
+ * checkboxes, one column each (sponsored, direct / quick apply, CV required), edit, delete (archive, with undo) and restore. Rules: docs/jobs-management.md.
  */
 type Order = 'board' | 'publishNew' | 'publishOld' | 'updated' | 'title';
 const ORDER_TO_SORT: Record<Order, { sortField?: string; sortOrder?: string }> = {
@@ -30,19 +31,21 @@ const ORDER_TO_SORT: Record<Order, { sortField?: string; sortOrder?: string }> =
 
 interface Filters {
     status: '' | JobStatus;
-    visibility: '' | 'public' | 'private';
     sponsored: boolean;
     pinned: boolean;
     scheduled: boolean;
     view: 'live' | 'only' | 'include';
     order: Order;
 }
-const EMPTY: Filters = { status: '', visibility: '', sponsored: false, pinned: false, scheduled: false, view: 'live', order: 'board' };
+const EMPTY: Filters = { status: '', sponsored: false, pinned: false, scheduled: false, view: 'live', order: 'board' };
 const PAGE_SIZE = 20;
 
 const JobsManagement: React.FC = () => {
     const tr = i18n.getTranslations();
     const t = tr.JobsAdmin;
+    // Placement coordinators manage jobs but not the apply settings or API keys (content managers and admins).
+    const { user } = useAuthStore();
+    const isContentManager = canManageContent(user?.role);
     const dir = i18n.isRTL() ? 'rtl' : 'ltr';
     const { initModal } = useModalStore();
     const { showToast } = useToastStore();
@@ -75,7 +78,6 @@ const JobsManagement: React.FC = () => {
         const f: filterOptions & Record<string, unknown> = { page, limit: PAGE_SIZE, ...ORDER_TO_SORT[filters.order] };
         if (debounced) f.inputValue = debounced;
         if (filters.status) f.jobStatus = [filters.status];
-        if (filters.visibility) f.visibility = filters.visibility;
         if (filters.sponsored) f.isSponsored = true;
         if (filters.pinned) f.pinned = true;
         if (filters.scheduled) f.scheduled = true;
@@ -108,6 +110,17 @@ const JobsManagement: React.FC = () => {
 
     const onPin = (job: JobData, pinned: boolean) =>
         void run(job, () => JobService.getInstance().pinJob(job._id!, pinned), pinned ? t.PinnedToast : t.UnpinnedToast);
+
+    const onBump = (job: JobData) =>
+        void run(job, () => JobService.getInstance().bumpJob(job._id!), t.BumpedToast);
+
+    // Site-wide apply defaults: a checkbox set back to the default value is stored as "follow the default".
+    const [applyDefaults, setApplyDefaults] = useState<ApplyPolicy | undefined>();
+    const loadApplyDefaults = useCallback(async () => {
+        const r = await SettingsService.getInstance().getApplyPolicy();
+        if (!isString(r)) setApplyDefaults(r);
+    }, []);
+    useEffect(() => { void loadApplyDefaults(); }, [loadApplyDefaults]);
 
     const onBoardChange = (job: JobData, values: Partial<JobData>) =>
         run(job, () => JobService.getInstance().updateJobBoard(job._id!, values), 'publishDate' in values ? t.DateSaved : t.SavedToast);
@@ -143,15 +156,6 @@ const JobsManagement: React.FC = () => {
         });
     };
 
-    const openApplySettings = () => {
-        initModal({
-            active: true,
-            modalTitle: tr.ApplyPolicy.SettingsTitle,
-            modalBody: <ApplyPolicySettings onClose={() => initModal({ active: false })} onSaved={() => fetchJobs()} />,
-            modalStyle: { dialogClassName: 'max-width-37-5rem', headerClass: 'bg-color-light-green', titleClass: 'font-RubikBold fs-4', bodyClass: 'p-0' },
-        });
-    };
-
     const filtersActive = JSON.stringify(filters) !== JSON.stringify(EMPTY) || !!search;
 
     return (
@@ -159,9 +163,6 @@ const JobsManagement: React.FC = () => {
             <div className="jobs-admin__head">
                 <h1 className="font-EzerRegularLoft display-6 m-0">{t.Title}</h1>
                 <div className="jobs-admin__head-actions">
-                    <button type="button" className="board-pill" onClick={openApplySettings}>
-                        <i className="bi bi-gear" aria-hidden="true" /> {t.ApplySettings}
-                    </button>
                     <button type="button" className="board-pill" onClick={() => navigate(ClientRoutes.JobSubmissions)}>
                         <i className="bi bi-inbox" aria-hidden="true" /> {t.Submissions}
                     </button>
@@ -186,15 +187,6 @@ const JobsManagement: React.FC = () => {
                         <option value={JobStatus.ACTIVE}>{tr.Jobs.Active}</option>
                         <option value={JobStatus.SUSPENDED}>{tr.Jobs.Suspended}</option>
                         <option value={JobStatus.CLOSED}>{tr.Jobs.Closed}</option>
-                    </select>
-                </div>
-                <div className="jobs-admin-filters__field">
-                    <label htmlFor="jobs-admin-visibility">{t.Visibility}</label>
-                    <select id="jobs-admin-visibility" className="form-select" value={filters.visibility}
-                        onChange={(e) => setFilter('visibility', e.target.value as Filters['visibility'])}>
-                        <option value="">{t.AllVisibility}</option>
-                        <option value="public">{t.PublicOnly}</option>
-                        <option value="private">{t.PrivateOnly}</option>
                     </select>
                 </div>
                 <div className="jobs-admin-filters__field">
@@ -249,7 +241,7 @@ const JobsManagement: React.FC = () => {
             <div className="jobs-admin__count">{loading ? t.Loading : fill(t.ResultCount, { n: total })}</div>
 
             {!loading && (
-                <JobTable jobs={jobs} busyId={busyId} onPin={onPin} onBoardChange={onBoardChange}
+                <JobTable jobs={jobs} busyId={busyId} onPin={onPin} onBump={onBump} applyDefaults={applyDefaults} canEditApplySettings={isContentManager} onBoardChange={onBoardChange}
                     onEdit={(j) => openForm(j)} onDelete={(j) => void onDelete(j)} onRestore={(j) => void onRestore(j)} />
             )}
 
@@ -280,10 +272,6 @@ const JobsManagement: React.FC = () => {
                 )}
             </ConfirmDialog>
 
-            {/* Internal API keys for SKEELZ's own systems; the content manager is the only role that may issue people scopes. */}
-            <div className="pb-5 pt-5">
-                <ApiTokens />
-            </div>
         </div>
     );
 };

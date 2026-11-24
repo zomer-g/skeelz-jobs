@@ -8,6 +8,7 @@ import { isString } from '../utils/utils';
 import { i18n } from '../i18n/I18n';
 import { ExtendedJobCard } from './jobcard/ExtendedJobCard';
 import { Spinner } from 'react-bootstrap';
+import { track } from '../utils/analytics';
 
 // Define constants for step names
 const DETAILS = 'details';
@@ -43,6 +44,9 @@ const CreateOrEditJobContainer: React.FC<CreateOrEditJobContainerProps> = ({
             showToast(response, "error")
             setBlockButton(false)
         } else {
+            // Analytics: the job's id only (jobs-management screen, staff).
+            const id = (response as { id?: unknown }).id;
+            if (typeof id === 'string') track('job_publish', { job_id: id });
             showToast(translations.Jobs.NewJobUploadedToast, "success");
         }
     };
@@ -60,11 +64,12 @@ const CreateOrEditJobContainer: React.FC<CreateOrEditJobContainerProps> = ({
         setBlockButton(true)
         if (!jobData) return;
         // applyPolicy is computed by the server (read-only); only the overrides are sent.
-        const { location, dateToDisplay, locationPreview, applyPolicy, ...jobDataToSend } = jobData;
+        // isSelfApply is computed by the server from the guest mode; the form sends guestModeOverride.
+        const { location, dateToDisplay, locationPreview, applyPolicy, isSelfApply, extraFields, ...jobDataToSend } = jobData;
         if (jobData._id) {
-            await editJob(jobDataToSend);
+            await editJob(jobDataToSend as JobData);
         } else {
-            await addNewJob(jobDataToSend);
+            await addNewJob(jobDataToSend as JobData);
         }
         if (onJobUploaded) {
             onJobUploaded();

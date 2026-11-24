@@ -3,6 +3,7 @@ import 'bootstrap-icons/font/bootstrap-icons.css';
 import './index.css'
 import { createRoot } from 'react-dom/client';
 import App from './App'
+import { registerServiceWorker } from './utils/pwa';
 
 // After a deploy, a page that was already open asks for build files that no
 // longer exist (their names change every build). Vite reports that here: load
@@ -18,6 +19,9 @@ window.addEventListener('vite:preloadError', () => {
   try { sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now())); } catch { return; /* cannot guard: no reload */ }
   window.location.reload();
 });
+
+// The installable app: a service worker that keeps only the public files (production builds, docs/pwa.md).
+registerServiceWorker();
 
 // No server-side rendering any more (every route was wrapped in NoSSR, so the
 // server HTML was empty anyway). The server only injects window.__INITIAL_DATA__.

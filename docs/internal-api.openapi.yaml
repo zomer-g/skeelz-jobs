@@ -8,8 +8,7 @@ info:
     Server-to-server API for SKEELZ's own integrations. Separate from the public read-only API.
 
     **Auth** — `Authorization: Bearer <token>`, one of:
-    - a temporary token issued by a staff member (content manager on `/jobs-management`, admin on `/security-management`;
-      the people scopes `candidates:read`, `applications:read`, `cvs:read` only by a content manager): a name, scopes and an
+    - a temporary token issued by an admin on `/security-management` (only admins issue keys): a name, scopes and an
       expiry (default 30 days, at most 90). Shown once; stored only as a SHA-256 hash with a visible prefix
       (`skzi_xxxxxxxx`). Can be revoked (effective on the next request). In the activity log it is `token:<prefix>`.
     - the server secret `INTERNAL_API_SECRET` (xhostd secret, ≥ 32 characters; unset = off). Every scope.
@@ -247,7 +246,10 @@ components:
         requiredSkills: { type: array, items: { type: string } }
         isSponsored: { type: boolean }
         isMarked: { type: boolean }
-        isSelfApply: { type: boolean }
+        isSelfApply: { type: boolean, description: "Legacy: true = guest mode self (הגשה עצמאית); false = back to the site default (only if it was self). Ignored once a content manager set the guest mode on the jobs-management screen." }
+        guestModeOverride: { type: string, nullable: true, enum: [self, quick, none], description: "How a visitor who is not signed in applies; null = the site default" }
+        quickCvOverride: { type: string, nullable: true, enum: [required, optional] }
+        regularCvOverride: { type: string, nullable: true, enum: [required, optional] }
     Job:
       allOf:
         - $ref: '#/components/schemas/JobInput'

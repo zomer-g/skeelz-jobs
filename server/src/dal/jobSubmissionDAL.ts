@@ -5,6 +5,7 @@ import { query, queryOne } from '../config/db.js';
 import { newObjectId, isObjectId } from '../utils/ids.js';
 import { SubmissionInput } from '../services/jobSubmissionRules.js';
 import { SUBMISSION_RETENTION_MONTHS } from '../security/pure.js';
+import { TERMS_VERSION } from '../security/consent.js';
 
 export type SubmissionStatus = 'pending' | 'approved' | 'rejected';
 export const STATUSES: SubmissionStatus[] = ['pending', 'approved', 'rejected'];
@@ -20,6 +21,8 @@ export interface SubmissionSummary {
   reviewedAt: Date | null;
   reviewedBy: string | null;
   jobId: string | null;
+  /** Sent by (or claimed by) a signed-in employer account (docs/employers.md). */
+  byAccount: boolean;
 }
 
 export interface Submission extends SubmissionSummary {
@@ -32,8 +35,12 @@ export interface Submission extends SubmissionSummary {
   contactName: string;
   contactEmail: string;
   contactPhone: string;
+  thresholdCondition: string | null;
   consentAt: Date;
   rejectReason: string | null;
+  ownerId: string | null;
+  /** Answers to the job form's added fields (settings screen), by field id. */
+  customFields: Record<string, string | boolean>;
 }
 
 const COLUMNS: Record<keyof SubmissionInput, string> = {
@@ -48,6 +55,7 @@ const COLUMNS: Record<keyof SubmissionInput, string> = {
   contactName: 'contact_name',
   contactEmail: 'contact_email',
   contactPhone: 'contact_phone',
+  thresholdCondition: 'threshold_condition',
 };
 
 const toSummary = (r: any): SubmissionSummary => ({
@@ -61,6 +69,7 @@ const toSummary = (r: any): SubmissionSummary => ({
   reviewedAt: r.reviewed_at,
   reviewedBy: r.reviewed_by,
   jobId: r.job_id,
+  byAccount: !!r.submitted_by_user_id,
 });
 
 const toFull = (r: any): Submission => ({
@@ -74,8 +83,11 @@ const toFull = (r: any): Submission => ({
   contactName: r.contact_name,
   contactEmail: r.contact_email,
   contactPhone: r.contact_phone,
+  thresholdCondition: r.threshold_condition ?? null,
   consentAt: r.consent_at,
   rejectReason: r.reject_reason,
+  ownerId: r.submitted_by_user_id ?? null,
+  customFields: r.custom_fields && typeof r.custom_fields === 'object' ? r.custom_fields : {},
 });
 
 const SELECT = `
@@ -88,18 +100,25 @@ export const countPending = async (): Promise<number> => {
   return Number(r?.n ?? 0);
 };
 
-export const create = async (v: SubmissionInput): Promise<string> => {
+/** `ownerId`: the signed-in employer who sent it (null for the anonymous form). */
+/** `customFields`: the answers to the job form's added fields, already checked (customFieldsService.checkValues). */
+export const create = async (v: SubmissionInput, consent: { marketing: boolean }, ownerId: string | null = null, customFields: Record<string, unknown> = {}): Promise<string> => {
   const id = newObjectId();
-  const cols = ['id', 'consent_at', ...Object.values(COLUMNS)];
-  const vals = [id, new Date(), ...Object.keys(COLUMNS).map((k) => (v as any)[k] ?? null)];
-  await query(`INSERT INTO job_submissions (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`, vals);
+  const now = new Date();
+  const cols = ['id', 'consent_at', 'terms_version', 'marketing_consent', 'marketing_consent_at', 'submitted_by_user_id', 'custom_fields', ...Object.values(COLUMNS)];
+  const vals = [id, now, TERMS_VERSION, consent.marketing, now, ownerId, JSON.stringify(customFields), ...Object.keys(COLUMNS).map((k) => (v as any)[k] ?? null)];
+  // The submission and its consent record (consent_records) in one statement.
+  await query(
+    `WITH s AS (INSERT INTO job_submissions (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')}) RETURNING id, terms_version, marketing_consent)
+     INSERT INTO consent_records (subject_kind, subject_id, privacy_version, marketing, source)
+     SELECT 'job_submission', s.id, s.terms_version, s.marketing_consent, 'job_form' FROM s`, vals);
   return id;
 };
 
 /** The list shows no contact details (they are shown, and logged, only when one submission is opened). */
 export const list = async (status: SubmissionStatus, limit = 100): Promise<{ items: SubmissionSummary[]; counts: Record<SubmissionStatus, number> }> => {
   const rows = await query(
-    `SELECT s.id, s.status, s.title, s.company_name, s.city_symbol, s.created_at, s.reviewed_at, s.reviewed_by, s.job_id, l.city AS l_city
+    `SELECT s.id, s.status, s.title, s.company_name, s.city_symbol, s.created_at, s.reviewed_at, s.reviewed_by, s.job_id, s.submitted_by_user_id, l.city AS l_city
      FROM job_submissions s LEFT JOIN locations l ON l.city_symbol = s.city_symbol
      WHERE s.status = $1 ORDER BY s.created_at ${status === 'pending' ? 'ASC' : 'DESC'} LIMIT $2`,
     [status, Math.max(1, Math.min(200, limit))]
@@ -158,6 +177,8 @@ export const reject = async (id: string, by: string, reason: string | null): Pro
 
 /** Retention: submissions (and the employer's contact details) SUBMISSION_RETENTION_MONTHS after review, or after sending if never reviewed. */
 export const purge = async (): Promise<number> => {
+  // Edit requests of employers (job data only) go with the same period once reviewed or withdrawn.
+  await query(`DELETE FROM job_edit_requests WHERE status <> 'pending' AND reviewed_at < now() - make_interval(months => $1)`, [SUBMISSION_RETENTION_MONTHS]);
   const r = await query(
     `DELETE FROM job_submissions WHERE COALESCE(reviewed_at, created_at) < now() - make_interval(months => $1) RETURNING id`,
     [SUBMISSION_RETENTION_MONTHS]);

@@ -58,18 +58,12 @@ export const getFileExtension = (fileName: string): string => {
     return fileName.split('.').pop()?.toLowerCase() || '';
 };
 
-// Utility function to exclude sensitive fields like password
-export const excludePassword = (user: IUser) => {
-    const { password, ...userWithoutPassword } = user;
-    return userWithoutPassword;
-};
-
 export const logAxiosError = (error: unknown, customMessage: string): void => {
     if (axios.isAxiosError(error)) {
         if (error.response) {
-            // API responded with an error
-            console.error(`${customMessage} - API Error:`, error.response.data);
-            console.error('Status Code:', error.response.status);
+            // API responded with an error: the status (and a third-party error code), never the response body.
+            const code = (error.response.data as any)?.[0]?.errorCode;
+            console.error(`${customMessage} - API Error: status ${error.response.status}${typeof code === 'string' && /^[A-Z_]{3,60}$/.test(code) ? ` (${code})` : ''}`);
         } else if (error.request) {
             // Request made but no response received
             console.error(`${customMessage} - No response received:`, error.code ?? error.message);

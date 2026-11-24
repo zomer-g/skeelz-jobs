@@ -1,20 +1,19 @@
 import { NextFunction, Request, Response } from 'express';
 import * as userService  from '../services/userService.js';
-import { CreateUserDto } from '../dto/createUserDto.js';
 import { UpdateUserDto } from '../dto/updateUserDto.js';
 import { usersFilter } from '../models/interfaces/general.interface.js';
 import { UserErrorCodes, UserErrorMessages } from '../i18n/i18n.js';
 import { AxiosError, isAxiosError } from 'axios';
 
 
-import { generateAndStoreRefreshToken } from '../services/authService.js';
-import { generateAccessToken } from '../services/tokenUtilityService.js';
-import { setAccessTokenInCookies, setRefreshTokenInCookies } from '../utils/authUtils.js';
 import { parseBoolean } from '../utils/utils.js';
 import { peopleHandover } from '../security/handover.js';
 import { AuditWriteError, actorOf, writeAudit } from '../security/audit.js';
 import { LimitError } from '../middleware/errorMiddleware.js';
 import { safeErrorText } from '../security/pure.js';
+
+  /** What PATCH /users/:id may change (content managers, candidates only). */
+  export const STAFF_EDITABLE_FIELDS = ['firstName', 'lastName', 'phoneNumber', 'dateOfBirth', 'gender', 'citySymbol', 'skills'] as const;
 
   export const fetchUsers = async (req: Request, res: Response, next: NextFunction) => {
     // Optional on the client; without it this threw outside the try and killed the process.
@@ -33,9 +32,10 @@ import { safeErrorText } from '../security/pure.js';
         place: 'GET /api/users',
         details: {
           filters: {
-            search: usersFilterParams.inputValue || undefined,
+            search: usersFilterParams.inputValue ? true : undefined, // that there was a search, never the text
             hasCv: usersFilterParams.hasCv || undefined,
             hasApplied: usersFilterParams.hasApplied || undefined,
+            marketing: usersFilterParams.marketing || undefined,
             sort: usersFilterParams.sortField ? `${usersFilterParams.sortField} ${usersFilterParams.sortOrder ?? ''}`.trim() : undefined,
           },
           page: Number(usersFilterParams.page || 1),
@@ -57,36 +57,13 @@ import { safeErrorText } from '../security/pure.js';
   };
 
 
-  export const createUser = async (req: Request, res: Response,next:NextFunction) => {
-    try {
-      const createUserDto: CreateUserDto = req.body;
-      const newUser = await userService.createUser(createUserDto);
-      if(newUser){
-        const userID = newUser._id.toString();
-        const accessToken = generateAccessToken({ userID, userRole: newUser.user.role });
-        const refreshToken = await generateAndStoreRefreshToken({ userID, userRole: newUser.user.role });
-        setAccessTokenInCookies(res,accessToken);
-        setRefreshTokenInCookies(res,refreshToken);
-        void writeAudit(`user:${userID}`, 'user.signed_up', userID, { has_cv: !!newUser.user.cvFileUrl });
-      }
-      return res.json({data:{
-        _id: newUser._id,
-        user: newUser.user,
-    }});
-      
-    } catch (error) {
-      console.error(error);
-      if (isAxiosError(error)) {
-      return next(error)
-      }
-        next(new AxiosError(UserErrorMessages.CREATE_USER_FAILED, UserErrorCodes.CREATE_USER_FAILED));
-    }
-  };
-
   export const updateUser = async (req: Request, res: Response,next:NextFunction): Promise<void> => {
   try {
     const userId = req.params.id; 
-    const updateUserDto: UpdateUserDto = req.body;
+    // A content manager edits a candidate's details only: not the email (the sign-in name and Google identity),
+    // not the CV (files reach a profile only through the candidate's own upload) and not the "has applied" flag.
+    const updateUserDto: UpdateUserDto = {};
+    for (const f of STAFF_EDITABLE_FIELDS) if (req.body?.[f] !== undefined) (updateUserDto as any)[f] = req.body[f];
 
     // Content managers edit candidates only; staff accounts are the admins' (staff users screen).
     const updatedUser = await userService.updateUserById(userId, updateUserDto, { candidatesOnly: true });
@@ -94,7 +71,7 @@ import { safeErrorText } from '../security/pure.js';
     if (updatedUser) {
       // Which fields changed, never their values.
       void writeAudit(actorOf(req), 'user.updated', String(updatedUser._id), {
-        ids: [String(updatedUser._id)], fields: Object.keys(updateUserDto ?? {}).filter((k) => k !== 'password').slice(0, 30),
+        ids: [String(updatedUser._id)], fields: Object.keys(updateUserDto).slice(0, 30),
       });
       res.status(200).json({ data: {
         message: 'User updated successfully',

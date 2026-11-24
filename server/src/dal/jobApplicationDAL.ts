@@ -5,6 +5,7 @@ import IJobApplication from "../models/schemas/jobApplication.js";
 import { escapeLike, escapeRegex, query, queryOne } from "../config/db.js";
 import { isObjectId, newObjectId } from "../utils/ids.js";
 import { rowToJob } from "./jobDAL.js";
+import { getApplyPolicyDefaults } from "../services/settingsService.js";
 
 const SORT_COLUMNS: Record<string, string> = {
   publishDate: 'j.publish_date',
@@ -26,11 +27,14 @@ const toApplication = (r: any): IJobApplication => ({
 export const addJobApplication = async (
   userId: string,
   jobId: string,
-  cv: { cvFileUrl?: string; cvScope?: string } = {}
+  cv: { cvFileUrl?: string; cvScope?: string } = {},
+  threshold: { confirmed: boolean; at: Date | null } = { confirmed: false, at: null }
 ): Promise<IJobApplication> => {
+  // threshold: the candidate confirmed the job's threshold condition (תנאי סף) and when; nothing else is stored.
   const rows = await query(
-    `INSERT INTO job_applications (id, user_id, job_id, cv_file_url, cv_scope) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [newObjectId(), userId, jobId, cv.cvFileUrl ?? '', cv.cvScope ?? '']
+    `INSERT INTO job_applications (id, user_id, job_id, cv_file_url, cv_scope, threshold_confirmed, threshold_confirmed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [newObjectId(), userId, jobId, cv.cvFileUrl ?? '', cv.cvScope ?? '', threshold.confirmed, threshold.at]
   );
   return toApplication(rows[0]);
 };
@@ -92,8 +96,9 @@ export const findAllJobApplictionsDetailsByUserId = async (
     queryOne<{ count: number }>(`SELECT COUNT(*)::int AS count ${from}`, params),
   ]);
 
+  const applyDefaults = await getApplyPolicyDefaults();
   const jobs = rows.map((r) => {
-    const job: any = rowToJob(r);
+    const job: any = rowToJob(r, { applyDefaults });
     job.userId = r.application_user_id;
     job.jobApplicationCreatedAt = r.application_created_at;
     job.jobAppcreatedAt = new Date(r.application_created_at).toISOString();
@@ -105,3 +110,7 @@ export const findAllJobApplictionsDetailsByUserId = async (
   });
   return { jobs, total: Number(count?.count ?? 0) };
 };
+
+/** The CV sent with one application (its stored key), or '' (no such application, or sent without a CV). */
+export const applicationCvKey = async (userId: string, jobId: string): Promise<string> =>
+  (await queryOne<{ k: string }>(`SELECT cv_file_url AS k FROM job_applications WHERE user_id = $1 AND job_id = $2 LIMIT 1`, [userId, jobId]))?.k ?? '';

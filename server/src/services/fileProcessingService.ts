@@ -29,15 +29,11 @@ export const validateAndSanitizeFile = async (fileBuffer: Buffer, fileType: stri
 };
 
 export const fetchCvUrlByUserId = async (userId: string): Promise<string> => {
-  try {
-    const user = await getUserById(userId);
-    const cvUrl = user?.cvFileUrl;
-    if (cvUrl) {
-      return cvUrl;
-    }
-    throw new AxiosError(FilesErrorMessages.CV_NOT_FOUND, FilesErrorCodes.CV_NOT_FOUND);
-    
-  } catch (error) {
-      throw new AxiosError(FilesErrorMessages.USER_NOT_FOUND, FilesErrorCodes.USER_NOT_FOUND);
-  }
+  // No such user → "user not found"; a user without a CV on the profile → "no CV" (it used to answer "user not
+  // found" for both). A CV sent with one application only: GET /admin/users/:userId/applications/:jobId/cv.
+  let user;
+  try { user = await getUserById(userId); } catch { user = null; }
+  if (!user) throw new AxiosError(FilesErrorMessages.USER_NOT_FOUND, FilesErrorCodes.USER_NOT_FOUND);
+  if (!user.cvFileUrl) throw new AxiosError(FilesErrorMessages.CV_NOT_FOUND, FilesErrorCodes.CV_NOT_FOUND);
+  return user.cvFileUrl;
 };

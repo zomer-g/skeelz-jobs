@@ -3,12 +3,14 @@ import { i18n } from "../../i18n/I18n";
 import { AllowedFileTypes, Language } from "../../i18n/General.enums";
 import { UploadFileService } from "../../services/api/UploadFile.service";
 import { JobService } from "../../services/api/Job.service";
+import { UserService } from "../../services/api/User.service";
 import { ApplyCvChoice, ApplyJobResponse } from "../../models/interfaces/Api.interfaces";
 import { generateToken, isEnglishString, isString } from "../../utils/utils";
 import { languageStore } from "../../store/Language.store";
 import Button from "../common/Button";
-import { errorCode, track, trackOnce } from "../../utils/analytics";
+import { applyFlow, trackOnce } from "../../utils/analytics";
 import { fileTypeOf } from "../../utils/analyticsPolicy";
+import { applyErrorText } from "../../utils/applyError";
 
 /*
  * Apply step for a signed-in candidate (rendered inside the global modal):
@@ -37,13 +39,15 @@ type ProfileCv = { fileName: string; uploadedAt: string | null } | null;
 
 interface ApplyWithCvDialogProps {
   jobId: string;
+  /** The job's regular-apply CV rule is 'required': without a profile CV an upload is needed (server-enforced). */
+  cvRequired?: boolean;
   onApplied: (result: ApplyJobResponse) => void;
   onCancel: () => void;
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-export const ApplyWithCvDialog: React.FC<ApplyWithCvDialogProps> = ({ jobId, onApplied, onCancel }) => {
+export const ApplyWithCvDialog: React.FC<ApplyWithCvDialogProps> = ({ jobId, cvRequired = false, onApplied, onCancel }) => {
   const t = i18n.getTranslations();
   const tr = t.ApplyCv;
   const isHebrew = languageStore.getState().currentLanguage === Language.HEBREW;
@@ -66,9 +70,12 @@ export const ApplyWithCvDialog: React.FC<ApplyWithCvDialogProps> = ({ jobId, onA
   const [scope, setScope] = useState<Scope | "">("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
+  // A candidate copied from the existing site applies, but their profile CV can't be replaced until the cutover.
+  const [profileLocked, setProfileLocked] = useState(false);
   // An upload that ended up unused is cancelled when the dialog goes away.
   const pendingUpload = useRef("");
   const applied = useRef(false);
+  const cvStepTracked = useRef(false);
 
   // --- dialog semantics, focus trap, Escape -----------------------------------
   const cancel = useCallback(() => {
@@ -91,6 +98,8 @@ export const ApplyWithCvDialog: React.FC<ApplyWithCvDialogProps> = ({ jobId, onA
       if (pendingUpload.current && !applied.current) {
         void UploadFileService.getInstance().deleteCV(pendingUpload.current);
       }
+      // Closed without applying (Cancel, Escape, the modal's X): the attempt ends here. No-op after success.
+      if (!applied.current) applyFlow.abandon("dialog_closed", jobId, "regular");
       if (opener && document.contains(opener)) opener.focus();
     };
   }, [titleId]);
@@ -129,15 +138,26 @@ export const ApplyWithCvDialog: React.FC<ApplyWithCvDialogProps> = ({ jobId, onA
   // Each step starts with its heading focused, so screen readers announce it.
   useEffect(() => {
     headingRef.current?.focus();
-    if (step !== "loading") trackOnce(`apply_form_shown:${jobId}`, "apply_form_shown", { job_id: jobId, apply_type: "registered", cv_required: false });
+    if (step !== "loading") {
+      trackOnce(`apply_form_shown:${jobId}`, "apply_form_shown", { job_id: jobId, apply_type: "registered", cv_required: cvRequired });
+      // Funnel: the CV step (its reason is cv_required, the job's rule), once per dialog.
+      if (!cvStepTracked.current) {
+        cvStepTracked.current = true;
+        applyFlow.ensure({ job_id: jobId, apply_type: "registered", apply_mode: "regular", cv_required: cvRequired });
+        applyFlow.step("apply_cv_step", "cv_step", {}, jobId);
+      }
+    }
   }, [step]);
 
   // --- data --------------------------------------------------------------------
   useEffect(() => {
     let alive = true;
     (async () => {
-      const result = await UploadFileService.getInstance().fetchMyCvInfo();
+      const [result, me] = await Promise.all([UploadFileService.getInstance().fetchMyCvInfo(), UserService.getInstance().getMe()]);
       if (!alive) return;
+      const locked = !isString(me) && !!me.readOnly;
+      setProfileLocked(locked);
+      if (locked) setScope("jobOnly");
       if (isString(result)) {
         setLoadError(true);
         setStep("upload");
@@ -182,7 +202,7 @@ export const ApplyWithCvDialog: React.FC<ApplyWithCvDialogProps> = ({ jobId, onA
     pendingUpload.current = "";
     setUploadedPath("");
     setUploadedName("");
-    setScope("");
+    setScope(profileLocked ? "jobOnly" : "");
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (path) await UploadFileService.getInstance().deleteCV(path);
   };
@@ -195,7 +215,7 @@ export const ApplyWithCvDialog: React.FC<ApplyWithCvDialogProps> = ({ jobId, onA
     if (pendingUpload.current) await discardUpload();
     const ext = file.name.toLowerCase().split(".").pop() ?? "";
     const uploadError = (code: string, message: string) => {
-      track("cv_upload_error", { job_id: jobId, apply_type: "registered", error_code: code });
+      applyFlow.step("apply_cv_upload_error", "cv_upload", { error_code: code }, jobId);
       setFileError(message);
     };
     if (!ALLOWED_TYPES.includes(ext)) return uploadError("UNSUPPORTED_TYPE", t.Cv.SupportedFormats);
@@ -204,40 +224,42 @@ export const ApplyWithCvDialog: React.FC<ApplyWithCvDialogProps> = ({ jobId, onA
     if (!NAME_PATTERN.test(file.name)) return uploadError("FILE_NAME_INVALID", t.Cv.fileNameInvalidCharacters);
 
     setUploading(true);
+    applyFlow.step("apply_cv_upload_start", "cv_upload", {}, jobId);
     const token = generateToken();
     const formData = new FormData();
     formData.append("file", file);
     const result = await UploadFileService.getInstance().uploadCV(token, formData, { "Content-Type": "multipart/form-data" });
     setUploading(false);
     if (isString(result)) {
-      track("cv_upload_error", { job_id: jobId, apply_type: "registered", error_code: "UPLOAD_FAILED" });
+      applyFlow.step("apply_cv_upload_error", "cv_upload", { error_code: "UPLOAD_FAILED" }, jobId);
       setFileError(t.Cv.UploadError);
       if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
     const path = `${token}/${sanitizeFileName(file.name)}`;
     pendingUpload.current = path;
-    track("cv_upload", { job_id: jobId, apply_type: "registered", file_type: fileTypeOf(file.name), file_size_kb: Math.round(file.size / 1024) });
+    applyFlow.step("apply_cv_upload", "cv_upload", { file_type: fileTypeOf(file.name), file_size_kb: Math.round(file.size / 1024) }, jobId);
     setUploadedPath(path);
     setUploadedName(file.name);
   };
 
   const submit = async (choice: ApplyCvChoice) => {
-    // keep = profile CV as is; none = no CV on file and applied without one.
-    const cvChoice = choice.mode === "replaceProfile" ? "replace" : choice.mode === "jobOnly" ? "job_only" : profileCv ? "keep" : "none";
-    const ev = { job_id: jobId, apply_type: "registered", cv_choice: cvChoice } as const;
-    track("apply_cv_choice", ev);
-    track("apply_submit", ev);
+    // Funnel: profile = the CV on the profile as is; updated = a new file that replaces it; job_only = a file for
+    // this job only; none = no CV on file and applied without one. Threshold, submit, success and error are
+    // recorded by JobService.applyJob.
+    const cvChoice = choice.mode === "replaceProfile" ? "updated" : choice.mode === "jobOnly" ? "job_only" : profileCv ? "profile" : "none";
+    applyFlow.set({ cv_choice: cvChoice }, jobId);
+    applyFlow.step("apply_cv_choice", "cv_choice", {}, jobId);
     setSubmitting(true);
     setSubmitError("");
     const result = await JobService.getInstance().applyJob(jobId, choice);
     setSubmitting(false);
     if (isString(result)) {
-      track("apply_error", { job_id: jobId, apply_type: "registered", error_code: errorCode(result) });
-      setSubmitError(tr.ApplyFailed);
+      // The reason when there is one (already applied, CV required, existing site's job, limits, the candidate's own
+      // cancel of the threshold / consent dialog); "try again" only for a network or unknown error.
+      setSubmitError(applyErrorText(result, tr.ApplyFailed));
       return;
     }
-    track("apply_success", ev);
     applied.current = true;
     onApplied(result);
   };
@@ -298,7 +320,7 @@ export const ApplyWithCvDialog: React.FC<ApplyWithCvDialogProps> = ({ jobId, onA
         <>
           {heading(profileCv ? tr.UploadHeading : tr.Title)}
           {!profileCv && (
-            <p className="font-RubikRegular text-center m-0">{loadError ? tr.LoadFailed : tr.NoCvOnFile}</p>
+            <p className="font-RubikRegular text-center m-0">{loadError ? tr.LoadFailed : cvRequired ? tr.CvRequiredForJob : tr.NoCvOnFile}</p>
           )}
           <p className="font-RubikRegular text-color-dark-grey text-center m-0">{tr.ReviewRequirements}</p>
 
@@ -331,7 +353,7 @@ export const ApplyWithCvDialog: React.FC<ApplyWithCvDialogProps> = ({ jobId, onA
               {([
                 ["replaceProfile", tr.ReplaceProfileCv, tr.ReplaceProfileCvHint],
                 ["jobOnly", tr.JobOnlyCv, tr.JobOnlyCvHint],
-              ] as const).map(([value, label, hint]) => (
+              ] as const).filter(([value]) => !(profileLocked && value === "replaceProfile")).map(([value, label, hint]) => (
                 <div className="form-check mb-2" key={value}>
                   <input
                     className="form-check-input float-none mx-1"
@@ -374,7 +396,7 @@ export const ApplyWithCvDialog: React.FC<ApplyWithCvDialogProps> = ({ jobId, onA
               {profileCv ? tr.Back : tr.Cancel}
             </Button>
           </div>
-          {!profileCv && !uploadedPath && (
+          {!profileCv && !uploadedPath && !cvRequired && (
             <button type="button" className="btn btn-link p-0 font-RubikRegular fs-14 align-self-center" onClick={() => submit({ mode: "profile" })} disabled={submitting}>
               {tr.ApplyWithoutCv}
             </button>

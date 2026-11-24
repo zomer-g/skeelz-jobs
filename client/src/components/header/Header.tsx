@@ -11,7 +11,10 @@ import SearchBar from '../common/SearchBar';
 import { LocationService } from '../../services/api/Location.service';
 import { arraysAreEqual, isString } from '../../utils/utils';
 import { i18n } from '../../i18n/I18n';
-import { CustomCitySymbol, DistrictsOptions, LocalizedDataKey, LocationGroupIds, isStaffRole, staffHomeRoute } from '../../i18n/General.enums';
+import { CustomCitySymbol, DistrictsOptions, LocalizedDataKey, LocationGroupIds, UserRole, isCandidateUser, isEmployerUser, personalAreaRoute, staffHomeRoute, staffRoleOfUser } from '../../i18n/General.enums';
+// Several roles per account (23.11.2026): add the candidate / employer role to one's own account (JoinRolePage).
+const JOIN_CANDIDATE_LABEL = 'הצטרפות גם כמועמד/ת';
+const JOIN_EMPLOYER_LABEL = 'הצטרפות גם כמעסיק';
 import { languageStore } from '../../store/Language.store';
 import { FilterParamsKeys, OptionType } from '../../models/interfaces/General.interfaces';
 import { JobService } from '../../services/api/Job.service';
@@ -21,11 +24,9 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import LoginModal from '../login/LoginModal';
 import { useSignInReturn, ssoSignOut } from '../../utils/signIn';
 import useModalStore from '../../store/Modal.store';
-import ResetPasswordRequest from '../ResetPasswordRequest';
-import ResetPassword from '../ResetPassword';
-import RegisterUser from '../register/RegisterUser';
 import { useProfileModals } from '../register/profileModals';
 import useAuthStore from '../../store/Auth.store';
+import { forgetSignupPreference, takeEmployerLoginRequest } from '../employer/employerApi';
 import { ClientRoutes } from '../../i18n/ClientRoutes.enum';
 import Toast from '../common/Toast';
 import { LoginService } from '../../services/api/Login.service';
@@ -34,6 +35,7 @@ import useHeaderStore from '../../store/HeaderStore';
 import { ExtendedJobCard, FormHandle } from '../jobcard/ExtendedJobCard';
 import { ApplyJobButtons } from '../jobcard/ApplyJobButtons';
 import { effectiveApplyPolicy } from '../../utils/applyPolicy';
+import { INSTALL_LABEL, IosInstallHelp, useInstallAction, useInstallAvailable } from '../pwa/InstallApp';
 import MenuIcon, { CheckContainedIcon, LogoutIcon, SettingsIcon, UserIcon } from '../../icons';
 import { SkillsService } from '../../services/api/Skills.service';
 import { AdminPanelHeader } from './AdminPanelHeader';
@@ -113,7 +115,7 @@ const getList = (sp: URLSearchParams, key: string) =>
               <ExtendedJobCard jobData={activeJob} source="direct" />
             </div>
             <div className={`text-start bg-light w-100 custom-border-top border-dark border-xs-0 py-2 px-3 height-5-625rem d-flex justify-content-center justify-content-sm-end align-items-center xs-top-shadow`} >
-              <ApplyJobButtons openDirectApplyModal={openDirectApplyModal} isSelfApply={activeJob.isSelfApply} quickApply={effectiveApplyPolicy(activeJob).quickApply} jobId={activeJob._id!} handleGuestApply={GuestApply}/>
+              <ApplyJobButtons openDirectApplyModal={openDirectApplyModal} applyPolicy={effectiveApplyPolicy(activeJob)} jobId={activeJob._id!} handleGuestApply={GuestApply} hasThreshold={!!activeJob.thresholdCondition?.trim()} onExistingSite={!!activeJob.onExistingSite}/>
             </div>
           </div>,
         modalStyle: {
@@ -130,6 +132,7 @@ const getList = (sp: URLSearchParams, key: string) =>
 
   useEffect(() => {
     if (openLogin) {
+      takeEmployerLoginRequest(); // an employer button asked → keep "employer"; anything else is a candidate
       activateLoginModal();
       setOpenLogin(false)
     }
@@ -142,33 +145,6 @@ const getList = (sp: URLSearchParams, key: string) =>
     }
   }, [initModal]);
 
-  useEffect(() => {
-    if (location.pathname === ClientRoutes.InitializePassword) {
-      activateRequestResetPasswordModal({ isFirstPasswordInitialization: true });
-    }
-  }, [location]);
-
-  useEffect(() => {
-    const searchParams = new URLSearchParams(location.search);
-    const tokenParam = searchParams.get('token');
-
-    if (tokenParam) {
-      initModal({
-        active: true,
-        modalTitle: translations.ResetPassword.Title,
-        modalBody: (
-          <ResetPassword token={tokenParam} />
-        ),
-        modalStyle: {
-          dialogClassName: "max-width-37-5rem",
-          bodyClass: "p-0",
-          titleClass: 'font-RubikBold fs-1-125rem'
-        }
-      })
-    }
-  }, [location.search]);
-
-  
   // Function to open Login modal
   const activateLoginModal = () => {
     setLoginModalStatus(true)
@@ -177,13 +153,18 @@ const getList = (sp: URLSearchParams, key: string) =>
       modalTitle: !userTryToApply ?translations.Header.Login : translations.Header.AlreadyRegisteredMessage ,
       modalBody: (<div style={{ minHeight: '28.437rem' }}>
         <LoginModal
-          onForgotPasswordClick={activateRequestResetPasswordModal}
           onSuccess={() => {
             setLoginModalStatus(false)
             closeModal();
             openPendingModalIfExists();
           }}
-          onRegisterButtonClicked={activateRegisterModal}
+          onEmailSignup={() => {
+            // A new address with a right code: the sign-up form (same details and consent as every sign-up).
+            setLoginModalStatus(false)
+            closeModal();
+            profileModals.openEmailSignup();
+          }}
+          onIncomplete={profileModals.openComplete}
         />
       </div>),
       modalStyle: {
@@ -194,31 +175,6 @@ const getList = (sp: URLSearchParams, key: string) =>
       onClose: () => { setLoginModalStatus(false); openPendingModalIfExists(); setUserTryToApply(false) },
     });
   };
-
-  const activateRegistrationSuccessModal = () => {
-    initModal({
-      active: true,
-      modalBody: (
-        <div className='d-flex justify-content-center flex-column align-items-center text-center mt-2'>
-          <div className="mt-2 mb-4 d-flex justify-content-center align-items-center rounded-circle size-3-375rem background-color-green-mint border-color-green-sage border-width-0-5-rem border">
-            <CheckContainedIcon size={25}/>
-          </div>
-          <h1 className='font-RubikBold m-0 fs-5 mb-4'>{translations.Register.RegistrationSuccess}</h1>
-          <Button
-            className='font-RubikMedium my-2 bg-color-dark-green-2 w-100 mb-4 min-w-16rem'
-            onClick={() => closeModal()}
-          >
-            {translations.JobApplicationModal.CloseButton}
-          </Button>
-        </div>
-      ),
-      modalStyle: {
-        bodyClass: "height-16-375rem d-flex flex-column justify-content-center align-items-center",
-        dialogClassName: "max-width-25rem"
-      },
-
-    });
-  }
 
   const openDirectApplyModal = () => {
     if(activeJob){
@@ -258,21 +214,6 @@ const getList = (sp: URLSearchParams, key: string) =>
   }
 
   
-  const activateRegisterModal = () => {
-    setLoginModalStatus(false)
-    initModal({
-      active: true,
-      modalTitle: `${translations.Header.SignUp}`,
-      modalBody: <RegisterUser onSuccess={() => { activateRegistrationSuccessModal(); }} />,
-      modalStyle: {
-        dialogClassName: "max-width-72-06rem",
-        bodyClass: "p-0",
-        titleClass: 'font-RubikBold fs-4'
-      },
-      onClose: () => { openPendingModalIfExists(); },
-    });
-  };
-
   const renderHeader = () => {
     switch (location.pathname) {
       case ClientRoutes.JobsManagement:
@@ -284,7 +225,16 @@ const getList = (sp: URLSearchParams, key: string) =>
       case ClientRoutes.SecurityManagement:
         return <AdminPanelHeader user={user} logOutCallback={handleLogout} />;
 
+      case ClientRoutes.StaffManagement:
+        return <AdminPanelHeader user={user} logOutCallback={handleLogout} />;
+
       case ClientRoutes.JobSubmissions:
+        return <AdminPanelHeader user={user} logOutCallback={handleLogout} />;
+
+      case ClientRoutes.MailManagement:
+        return <AdminPanelHeader user={user} logOutCallback={handleLogout} />;
+
+      case ClientRoutes.Settings:
         return <AdminPanelHeader user={user} logOutCallback={handleLogout} />;
 
       case ClientRoutes.PostJob:
@@ -293,27 +243,12 @@ const getList = (sp: URLSearchParams, key: string) =>
       case ClientRoutes.JobApplicationsManagement:
         return <BasicHeader user={user} logOutCallback={handleLogout} />;
 
+      case ClientRoutes.EmployerArea:
+        return <BasicHeader user={user} logOutCallback={handleLogout} />;
+
       default:
         return <JobSearchHeader user={user} logOutCallback={handleLogout} />;
     }
-  };
-
-  // Function to open Reset Password modal
-  const activateRequestResetPasswordModal = (options?: { isFirstPasswordInitialization?: boolean }) => {
-    setLoginModalStatus(false)
-    initModal({
-      active: true,
-      modalTitle: options?.isFirstPasswordInitialization ? translations.InitializePasswordModal.Title : translations.ResetPasswordRequest.Title,
-      modalBody:
-        <div className='height-28-437rem'>
-          <ResetPasswordRequest onRegisterButtonClicked={activateRegisterModal} isFirstPasswordInitialization={options?.isFirstPasswordInitialization} />
-        </div>,
-      modalStyle: {
-        dialogClassName: "max-width-37-5rem",
-        bodyClass: "p-0",
-        titleClass: 'font-RubikBold fs-1-125rem'
-      }
-    });
   };
 
   // Login button, or the signed-in user's menu. On the job board it sits in the
@@ -322,6 +257,9 @@ const getList = (sp: URLSearchParams, key: string) =>
   const RenderButtons: React.FC<{ user?: User | null; logoutCallback: () => void, excludeAdminButton?: boolean }> = ({ user, logoutCallback, excludeAdminButton = false }) => {
     const navigate = useNavigate();
     const [isClient, setIsClient] = useState(false); // Track client-side rendering
+    // "התקנת האפליקציה" in the phone menu (docs/pwa.md); hidden when installed or not installable.
+    const installAvailable = useInstallAvailable();
+    const install = useInstallAction('menu');
 
     useEffect(() => {
       setIsClient(true); // Set to true after client has hydrated
@@ -336,8 +274,8 @@ const getList = (sp: URLSearchParams, key: string) =>
       return (
         <button
           type="button"
-          className={`board-pill board-pill--outline ${loginModalStatus ? 'z-index-high' : 'z-index-low'}`}
-          onClick={activateLoginModal}
+          className="board-pill board-pill--outline z-index-low"
+          onClick={() => { forgetSignupPreference(); activateLoginModal(); }} // "התחברות" = a job seeker
         >
           <i className="bi bi-person" aria-hidden="true" />
           {translations.Header.Login}
@@ -345,18 +283,33 @@ const getList = (sp: URLSearchParams, key: string) =>
       );
     }
 
+    // Several roles per account (23.11.2026): one entry per area this session has.
+    const staffRole = staffRoleOfUser(user);
+    const candidate = isCandidateUser(user);
+    const employer = isEmployerUser(user);
+    // The personal area: a candidate's, or (as before) a staff member's own page when they are not an employer only.
+    const personal = candidate || (!!staffRole && !employer);
+    const employerAreaLabel = translations.Employers.AreaTitle;
     return (
       <>
         <div className="d-none d-lg-flex gap-2 flex-wrap justify-content-end">
-          {!excludeAdminButton && isStaffRole(user.role) && (
-            <button type="button" className="board-pill board-pill--outline" onClick={() => navigate(staffHomeRoute(user.role))}>
+          {!excludeAdminButton && !!staffRole && (
+            <button type="button" className="board-pill board-pill--outline" onClick={() => navigate(staffHomeRoute(staffRole))}>
               {translations.Header.AdminSystem}
             </button>
           )}
-          <button type="button" className="board-pill board-pill--outline" onClick={() => navigate(ClientRoutes.JobApplicationsManagement)}>
+          {employer && (
+            <button type="button" className="board-pill board-pill--outline" onClick={() => navigate(ClientRoutes.EmployerArea)}>
+              <i className="bi bi-building" aria-hidden="true" />
+              {employerAreaLabel}
+            </button>
+          )}
+          {personal && (
+          <button type="button" className="board-pill board-pill--outline" onClick={() => navigate(personalAreaRoute(UserRole.USER))}>
             <i className="bi bi-person" aria-hidden="true" />
             {translations.Header.userDashboard}
           </button>
+          )}
           <button type="button" className="board-pill board-pill--outline" onClick={logoutCallback}>
             {translations.Header.Logout}
           </button>
@@ -370,16 +323,40 @@ const getList = (sp: URLSearchParams, key: string) =>
             onClose={() => setSidebarOpen(false)}
             side="left"
             buttons={[
-              {
+              ...(personal ? [{
                 label: translations.Header.userDashboard, icon: <UserIcon />, onClick: () => {
-                  navigate(ClientRoutes.JobApplicationsManagement)
+                  navigate(personalAreaRoute(UserRole.USER))
                   setSidebarOpen(false)
                 }
-              },
-              ...(isStaffRole(user.role) ? [{
+              }] : []),
+              ...(employer ? [{
+                label: employerAreaLabel, icon: <i className="bi bi-building" aria-hidden="true" />, onClick: () => {
+                  navigate(ClientRoutes.EmployerArea)
+                  setSidebarOpen(false)
+                }
+              }] : []),
+              ...(staffRole ? [{
                 label: translations.Header.AdminSystem, icon: <SettingsIcon />, onClick: () => {
-                  navigate(staffHomeRoute(user.role))
+                  navigate(staffHomeRoute(staffRole))
                   setSidebarOpen(false);
+                }
+              }] : []),
+              ...(!candidate ? [{
+                label: JOIN_CANDIDATE_LABEL, icon: <i className="bi bi-person-plus" aria-hidden="true" />, onClick: () => {
+                  navigate(ClientRoutes.JoinAsCandidate)
+                  setSidebarOpen(false)
+                }
+              }] : []),
+              ...(!employer ? [{
+                label: JOIN_EMPLOYER_LABEL, icon: <i className="bi bi-building-add" aria-hidden="true" />, onClick: () => {
+                  navigate(ClientRoutes.JoinAsEmployer)
+                  setSidebarOpen(false)
+                }
+              }] : []),
+              ...(installAvailable ? [{
+                label: INSTALL_LABEL, icon: <i className="bi bi-phone" aria-hidden="true" />, onClick: () => {
+                  setSidebarOpen(false);
+                  install.run();
                 }
               }] : []),
             ]
@@ -393,6 +370,7 @@ const getList = (sp: URLSearchParams, key: string) =>
               },
             }}
           />
+          <IosInstallHelp show={install.iosHelp} onClose={install.closeIosHelp} />
         </div>
       </>
     );
@@ -880,7 +858,7 @@ const handleSearch = (
         <BasicModal
           initialTitle={activeJob?.title}
           initialBody={<ExtendedJobCard jobData={activeJob} />}
-          initialFooter={<ApplyJobButtons openDirectApplyModal={openDirectApplyModal} isSelfApply={activeJob.isSelfApply} quickApply={effectiveApplyPolicy(activeJob).quickApply} jobId={activeJob._id!} handleGuestApply={GuestApply}/>}
+          initialFooter={<ApplyJobButtons openDirectApplyModal={openDirectApplyModal} applyPolicy={effectiveApplyPolicy(activeJob)} jobId={activeJob._id!} handleGuestApply={GuestApply} hasThreshold={!!activeJob.thresholdCondition?.trim()} onExistingSite={!!activeJob.onExistingSite}/>}
         /> :
         <BasicModal />}
        {renderHeader()}

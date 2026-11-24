@@ -65,4 +65,9 @@ const container = {
   },
 };
 fs.writeFileSync(path.join(here, 'gtm-container.json'), JSON.stringify(container, null, 2) + '\n');
+// The same container with the live property's measurement ID (docs/analytics.md §0), ready to import into
+// GTM-WXQW5LTX with "Merge → Overwrite conflicting". A measurement ID is public (it is in every page that loads GA).
+const LIVE_MEASUREMENT_ID = 'G-RPMX021BL3';
+fs.writeFileSync(path.join(here, 'gtm-container.skeelz-live.json'),
+  JSON.stringify(container, null, 2).replace('"G-XXXXXXXXXX"', `"${LIVE_MEASUREMENT_ID}"`) + '\n');
 console.log(`events ${names.length}, params ${params.length}, variables ${variable.length}`);

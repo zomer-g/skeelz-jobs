@@ -7,7 +7,8 @@
  *  are not public, and they already live in Salesforce).
  *
  *  Ids are kept: job _id (so /job/<id> links match the live site), job number
- *  (Salesforce links), skill ids and city symbols.
+ *  (Salesforce links), skill ids and city symbols. The jobs are read-only here
+ *  (imported_from_live): only jobs created on this platform can be changed.
  *
  *  Usage:  node dist/scripts/importFromLive.js [--if-empty]
  * ========================================================================== */
@@ -86,17 +87,12 @@ export const importFromLive = async (opts: { ifEmpty?: boolean } = {}) => {
     await query(
       `INSERT INTO jobs (id, job_id, title, job_scope, company_name, publish_date, city_symbol, description,
                          contact_person_name, contact_person_phone, contact_person_email, external_link, upload_by,
-                         status, required_skills, is_sponsored, is_marked, is_self_apply, created_at, updated_at)
+                         status, required_skills, is_sponsored, is_marked, is_self_apply, guest_mode_override, created_at, updated_at,
+                         imported_from_live)
        VALUES ($1, COALESCE($2, nextval('jobs_job_id_seq')), $3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-               COALESCE($19, now()), COALESCE($20, now()))
-       ON CONFLICT (id) DO UPDATE SET
-         title = EXCLUDED.title, job_scope = EXCLUDED.job_scope, company_name = EXCLUDED.company_name,
-         publish_date = EXCLUDED.publish_date, city_symbol = EXCLUDED.city_symbol, description = EXCLUDED.description,
-         contact_person_name = EXCLUDED.contact_person_name, contact_person_phone = EXCLUDED.contact_person_phone,
-         contact_person_email = EXCLUDED.contact_person_email, external_link = EXCLUDED.external_link,
-         upload_by = EXCLUDED.upload_by, status = EXCLUDED.status, required_skills = EXCLUDED.required_skills,
-         is_sponsored = EXCLUDED.is_sponsored, is_marked = EXCLUDED.is_marked, is_self_apply = EXCLUDED.is_self_apply,
-         updated_at = EXCLUDED.updated_at`,
+               CASE WHEN $18 THEN 'self' END, COALESCE($19, now()), COALESCE($20, now()), true)
+       -- Imported jobs are read-only on this platform (db.ts jobs_imported_readonly): a second run adds, never changes.
+       ON CONFLICT (id) DO NOTHING`,
       [
         j._id,
         Number.isFinite(jobNumber) && jobNumber > 0 ? jobNumber : null,

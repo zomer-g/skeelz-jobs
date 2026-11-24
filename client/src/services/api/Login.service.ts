@@ -1,16 +1,25 @@
 import { RequestEnum } from '../../i18n/General.enums';
 import { Routes } from '../../i18n/Routes.enum';
 import { OnlyMessageResponse } from '../../models/interfaces/Api.interfaces';
-import { LoginFormValues, LoginResponse } from '../../models/interfaces/Props.interfaces';
+import { LoginResponse } from '../../models/interfaces/Props.interfaces';
 import GlobalApiService from './GlobalApi.service';
 import { environment } from '../../environments/Environment';
 
 
+export type EmailCodeVerifyResult =
+    | ({ status: 'signed_in'; profileIncomplete?: boolean } & LoginResponse)
+    | { status: 'signup'; email: string };
+
 export interface SignInProviders {
+    /** Always false: candidates have no password (since 11.2026). */
     password: boolean;
+    /** "קבלת קוד למייל": a one-time code by email (candidates). */
+    emailCode?: boolean;
     /** "Continue with Google" = xhostd SSO (candidates and staff; staff only this way). */
     sso: boolean;
     ssoLogoutUrl: string | null;
+    /** "Continue with Microsoft" (candidates only). */
+    microsoft?: boolean;
 }
 
 export class LoginService {
@@ -21,7 +30,7 @@ export class LoginService {
     getProviders(): Promise<SignInProviders> {
         if (!this.providersPromise) {
             this.providersPromise = GlobalApiService.generalRequest<SignInProviders>(RequestEnum.Get, `${Routes.AUTH_PROVIDERS}`, {})
-                .then((r) => (typeof r === 'string' || !r ? { password: true, sso: false, ssoLogoutUrl: null } : r));
+                .then((r) => (typeof r === 'string' || !r ? { password: false, emailCode: false, sso: false, ssoLogoutUrl: null, microsoft: false } : r));
         }
         return this.providersPromise;
     }
@@ -47,6 +56,12 @@ export class LoginService {
         return `${environment.API_URL}${Routes.SSO_SIGN_IN}?return_to=${encodeURIComponent(here)}`;
     }
 
+    /** Full-page navigation to "Continue with Microsoft" (candidates only); comes back the same way. */
+    microsoftSignInUrl(): string {
+        const here = typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/';
+        return `${environment.API_URL}${Routes.MS_SIGN_IN}?return_to=${encodeURIComponent(here)}`;
+    }
+
     private static instance: LoginService;
 
     static getInstance() {
@@ -56,14 +71,25 @@ export class LoginService {
         return this.instance;
     }
 
-    async login(values: LoginFormValues): Promise<LoginResponse | string> {
-        const result: LoginResponse | string = await GlobalApiService.generalRequest(
-            RequestEnum.Post,
-            `${Routes.LOGIN}`,
-            values,
-        );
-        return result;
+    /** "קבלת קוד למייל": asks for a sign-in code. The answer is the same for every address (the server never says
+     *  whether an account exists). */
+    async requestEmailCode(email: string): Promise<{ message: string; resendAfter: number; validMinutes: number } | string> {
+        return GlobalApiService.generalRequest(RequestEnum.Post, `${Routes.EMAIL_CODE_REQUEST}`, { email });
+    }
 
+    /** Checks the code: signed in (an existing candidate), or a new address → the sign-up form. */
+    async verifyEmailCode(email: string, code: string): Promise<EmailCodeVerifyResult | string> {
+        return GlobalApiService.generalRequest(RequestEnum.Post, `${Routes.EMAIL_CODE_VERIFY}`, { email, code });
+    }
+
+    /** The pending sign-up after a right code for a new address (email read-only), or null. */
+    async getPendingEmailSignup(): Promise<{ email: string; firstName: string; lastName: string } | null | string> {
+        return GlobalApiService.generalRequest(RequestEnum.Get, `${Routes.EMAIL_SIGN_UP}`, {});
+    }
+
+    /** Finishes that sign-up: the server takes the email from its own signed cookie, not from here. */
+    async completeEmailSignup(values: Record<string, unknown>): Promise<LoginResponse | string> {
+        return GlobalApiService.generalRequest<LoginResponse>(RequestEnum.Post, `${Routes.EMAIL_SIGN_UP}`, values);
     }
 
     async logoutRequest() {
@@ -72,26 +98,6 @@ export class LoginService {
                 RequestEnum.Post,
                 `${Routes.LOGOUT}`,
                 {},
-            );
-        return response;
-    }
-
-    async resetPassword(data: { token: string, newPassword: string }): Promise<OnlyMessageResponse | string> {
-        const response: OnlyMessageResponse | string =
-            await GlobalApiService.generalRequest(
-                RequestEnum.Post,
-                `${Routes.RESET_PASSWORD}`,
-                data,
-            );
-        return response;
-    }
-
-    async requestPasswordReset(data: { email: string }): Promise<OnlyMessageResponse | string> {
-        const response: OnlyMessageResponse | string =
-            await GlobalApiService.generalRequest(
-                RequestEnum.Post,
-                `${Routes.PASSWORD_RESET_REQUEST}`,
-                data,
             );
         return response;
     }

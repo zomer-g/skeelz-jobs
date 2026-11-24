@@ -3,6 +3,8 @@ import { Routes } from '../../i18n/Routes.enum';
 import { ApplyPolicy } from '../../models/interfaces/Props.interfaces';
 import GlobalApiService from './GlobalApi.service';
 
+export type EmployerPostingMode = 'open' | 'account_required';
+
 class SettingsService {
     private static instance: SettingsService;
 
@@ -20,6 +22,15 @@ class SettingsService {
 
     async updateApplyPolicy(values: Partial<ApplyPolicy>): Promise<ApplyPolicy | string> {
         return GlobalApiService.generalRequest<ApplyPolicy>(RequestEnum.Put, Routes.APPLY_POLICY_SETTINGS, values);
+    }
+
+    /** Employer job posting: 'open' (the anonymous form) or 'account_required' (docs/employers.md). Content managers and admins. */
+    async getEmployerPosting(): Promise<{ mode: EmployerPostingMode } | string> {
+        return GlobalApiService.generalRequest<{ mode: EmployerPostingMode }>(RequestEnum.Get, Routes.EMPLOYER_POSTING_SETTINGS, {});
+    }
+
+    async updateEmployerPosting(mode: EmployerPostingMode): Promise<{ mode: EmployerPostingMode } | string> {
+        return GlobalApiService.generalRequest<{ mode: EmployerPostingMode }>(RequestEnum.Put, Routes.EMPLOYER_POSTING_SETTINGS, { mode });
     }
 }
 

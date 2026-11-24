@@ -1,4 +1,5 @@
-import { Chip } from "@mui/material";
+import { useEffect, useState } from "react";
+import { JobService } from "../../services/api/Job.service";
 import { safeHtml } from '../../utils/safeHtml';
 import { i18n } from "../../i18n/I18n";
 import { BagIcon, ClockIcon, DocIcon, LocationIcon, MailIcon, PlanetIcon, ProfileIcon, UserIcon } from "../../icons";
@@ -9,17 +10,40 @@ import { Colors } from "../../i18n/General.enums";
 
 interface JobCardDataProps {
     jobData: JobData;
+    /** Inside the job page's "apply directly to the employer" box: contact lines only. */
+    compact?: boolean;
 }
 
-export const DirectApplyJobCard: React.FC<JobCardDataProps> = ({ jobData }) => {
+type Contact = Pick<JobData, 'contactPersonName' | 'contactPersonPhone' | 'contactPersonEmail'>;
+
+/**
+ * The employer's details for a self-apply job (guest mode 'self'). The job lists (board, map, page data) carry no
+ * contact details; they are fetched here from GET /api/jobs/:jobId, which sends contactPerson* to the public only
+ * on such jobs (jobDAL.rowToJob). On other jobs this shows the title and company only.
+ */
+export const DirectApplyJobCard: React.FC<JobCardDataProps> = ({ jobData: listed, compact = false }) => {
 
     const translations = i18n.getTranslations();
+    const [contact, setContact] = useState<Contact | null>(null);
+    useEffect(() => {
+        setContact(null);
+        if (!listed?._id || listed.contactPersonName || listed.contactPersonPhone || listed.contactPersonEmail) return;
+        let alive = true;
+        JobService.getInstance().getJobById(String(listed._id)).then((r) => {
+            if (!alive || !r || typeof r === 'string') return;
+            const j: any = (r as any).data ?? r;
+            setContact({ contactPersonName: j?.contactPersonName, contactPersonPhone: j?.contactPersonPhone, contactPersonEmail: j?.contactPersonEmail });
+        }).catch(() => undefined);
+        return () => { alive = false; };
+    }, [listed?._id]);
+    const jobData: JobData = contact ? { ...listed, ...contact } : listed;
 
     return (
         <div>
             <div className="row">
-                <h3 className="font-RubikRegular fs-6">{translations.JobCard.manualApplicationInfo}</h3>
+                {!compact && <h3 className="font-RubikRegular fs-6">{translations.JobCard.manualApplicationInfo}</h3>}
                 <div className="col-12">
+                    {!compact && <>
                     <div>
                         <JobInfo
                             icon={<DocIcon color={Colors.LightGrayB}/>}
@@ -34,6 +58,7 @@ export const DirectApplyJobCard: React.FC<JobCardDataProps> = ({ jobData }) => {
                             info={jobData.companyName || ""}
                         />
                     </div>
+                    </>}
                 {jobData.contactPersonName &&
                     <div>
                         <JobInfo
@@ -59,6 +84,7 @@ export const DirectApplyJobCard: React.FC<JobCardDataProps> = ({ jobData }) => {
                                 title={translations.Jobs.Mail}
                                 info={jobData?.contactPersonEmail || ""}
                                 infoUrl={true}
+                                noTruncate={compact}
                             />
                         </div>
                     }
@@ -69,10 +95,12 @@ export const DirectApplyJobCard: React.FC<JobCardDataProps> = ({ jobData }) => {
                                 title={translations.Jobs.linkToApply}
                                 info={jobData?.externalLink}
                                 infoUrl={true}
+                                noTruncate={compact}
                             />
                         </div>
                     }
 
+                    {!compact && <>
                     <hr className="w-10 my-4" />
                     <h3 className="font-RubikRegular fs-6">{translations.JobCard.manualApplicationInstruction}</h3>
                     <div className="xxl-min-h-5vh">
@@ -89,6 +117,7 @@ export const DirectApplyJobCard: React.FC<JobCardDataProps> = ({ jobData }) => {
                             dangerouslySetInnerHTML={{ __html: safeHtml(jobData.comments) }}
                         />
                     </div>
+                    </>}
                 </div>
             </div>
         </div>

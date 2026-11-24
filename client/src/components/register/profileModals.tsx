@@ -1,5 +1,6 @@
 import React from 'react';
 import RegisterUser, { RegisterMode } from './RegisterUser';
+import SignUpChooser from './SignUpChooser';
 import useModalStore from '../../store/Modal.store';
 import useToastStore from '../../store/Toast.store';
 import { LoginService } from '../../services/api/Login.service';
@@ -18,13 +19,16 @@ const fromUser = (u: any): Partial<RegisterFormValues> => ({
   citySymbol: Number(u?.citySymbol) > 0 ? Number(u.citySymbol) : 0,
   gender: (Object.values(Gender) as string[]).includes(u?.gender) ? (u.gender as Gender) : null,
   dateOfBirth: u?.dateOfBirth ? new Date(u.dateOfBirth) : null,
+  idNumber: typeof u?.idNumber === 'string' ? u.idNumber : '',
   skills: Array.isArray(u?.skills) ? u.skills.map(String) : [],
   cvFileUrl: '',
+  customFields: u?.customFields && typeof u.customFields === 'object' ? { ...u.customFields } : {},
 });
 
 /**
  * Opens the details form in the site modal:
  *   openSsoSignup  after "Continue with Google" with a new identity (?signin=signup)
+ *   openEmailSignup after a right code by email for a new address
  *   openComplete   a signed-in candidate whose required details are missing
  *   openEdit       the personal area ("My details")
  */
@@ -37,7 +41,20 @@ export const useProfileModals = () => {
     initModal({
       active: true,
       modalTitle: title,
-      modalBody: (
+      // A sign-up starts with the choice: candidate or employer (docs/employers.md).
+      modalBody: mode === 'sso-signup' || mode === 'email-signup' ? (
+        <SignUpChooser
+          mode={mode}
+          prefill={prefill}
+          onCandidateDone={() => { closeModal(); if (doneText) showToast(doneText, 'success'); }}
+          onEmployerDone={() => {
+            closeModal();
+            showToast(t().Employers.SignedUp, 'success');
+            // On /post-job the employer goes on to send the job; anywhere else, to their area.
+            if (typeof window !== 'undefined' && window.location.pathname !== '/post-job') window.location.assign('/employer');
+          }}
+        />
+      ) : (
         <RegisterUser
           mode={mode}
           prefill={prefill}
@@ -57,6 +74,15 @@ export const useProfileModals = () => {
     open('sso-signup', t().Profile.SignUpTitle, { email: p.email, firstName: p.firstName, lastName: p.lastName }, false, t().Profile.SignedUp);
   };
 
+  const openEmailSignup = async () => {
+    const p = await LoginService.getInstance().getPendingEmailSignup();
+    if (!p || isString(p)) {
+      showToast(t().AuthErrorMessages.EMAIL_SIGNUP_EXPIRED, 'error');
+      return;
+    }
+    open('email-signup', t().Profile.SignUpTitle, { email: p.email }, false, t().Profile.SignedUp);
+  };
+
   const openOwn = async (mode: 'complete' | 'edit') => {
     const me = await UserService.getInstance().getMe();
     if (isString(me)) {
@@ -66,5 +92,5 @@ export const useProfileModals = () => {
     open(mode, mode === 'edit' ? t().Profile.EditTitle : t().Profile.CompleteTitle, fromUser(me.user), !!me.user?.cvFileUrl);
   };
 
-  return { openSsoSignup, openComplete: () => openOwn('complete'), openEdit: () => openOwn('edit') };
+  return { openSsoSignup, openEmailSignup, openComplete: () => openOwn('complete'), openEdit: () => openOwn('edit') };
 };

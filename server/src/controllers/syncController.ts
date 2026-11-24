@@ -16,26 +16,28 @@ import { query } from '../config/db.js';
 import { importFromProd } from '../scripts/importFromProd.js';
 import { AuditWriteError, actorOf, writeAudit, writeAuditStrict } from '../security/audit.js';
 import { safeErrorText } from '../security/pure.js';
+import { jobsChanged } from '../services/jobsCache.js';
 
 const sha = (s: string) => crypto.createHash('sha256').update(s).digest();
 
 export const isSandbox = () => process.env.SANDBOX === 'true';
 
-/* POST /api/internal/sandbox-refresh — admin only, sandbox only (404 elsewhere).
+/* POST /api/internal/sandbox-refresh — admin only (routes.ts), sandbox only (404 elsewhere).
  * Replaces the sandbox's data with a fresh copy of prod's; one run at a time. */
 let refreshing = false;
-export const refreshSandbox = (onDone: () => void) => async (_req: Request, res: Response): Promise<void> => {
+export const refreshSandbox = async (req: Request, res: Response): Promise<void> => {
   if (!isSandbox()) { res.status(404).json({ message: 'Not found' }); return; }
   if (refreshing) { res.status(409).json({ message: 'A refresh is already running' }); return; }
   refreshing = true;
   try {
     const result = await importFromProd();
-    onDone();
-    void writeAudit(actorOf(_req), 'sandbox.refreshed', null, { counts: result?.counts });
+    jobsChanged();
+    void writeAudit(actorOf(req), 'sandbox.refreshed', null, { counts: result?.counts });
     res.json({ data: result });
   } catch (e) {
-    console.error('[sandbox] refresh failed:', (e as Error).message);
-    res.status(502).json({ message: `Copy from prod failed: ${(e as Error).message}` });
+    // Neither the answer nor the console carries raw error text (it may hold a URL, a host or data).
+    console.error('[sandbox] refresh failed:', safeErrorText(e));
+    res.status(502).json({ message: 'Copy from prod failed', code: 'sandbox_refresh_failed' });
   } finally {
     refreshing = false;
   }
@@ -52,7 +54,10 @@ export const exportForSandbox = async (req: Request, res: Response): Promise<voi
     const [locations, skills, jobs, users, jobApplications] = await Promise.all([
       query(`SELECT * FROM locations`),
       query(`SELECT * FROM skills`),
-      query(`SELECT * FROM jobs`),
+      // The employer's contact person and the internal comments never leave prod.
+      query(`SELECT * FROM jobs`).then((rows) => rows.map((j) => ({
+        ...j, contact_person_name: '', contact_person_phone: '', contact_person_email: '', comments: '',
+      }))),
       query(`SELECT id, 'משתמש' AS first_name, 'בדיקה ' || right(id, 6) AS last_name,
                     'user-' || id || '@sandbox.test' AS email, 'sbx-' || id AS phone_number,
                     NULL::timestamptz AS date_of_birth, gender, city_symbol, '' AS password, skills,

@@ -3,13 +3,21 @@ import { CheckContainedIcon } from "../../icons";
 import { ApplyJobButtonsProps, Guest } from "../../models/interfaces/Props.interfaces";
 import { ApplyJobResponse } from "../../models/interfaces/Api.interfaces";
 import useAuthStore from "../../store/Auth.store";
+import { isCandidateUser, isEmployerUser } from "../../i18n/General.enums";
 import useModalStore from "../../store/Modal.store";
 import useToastStore from "../../store/Toast.store";
 import Button from "../common/Button";
 import { ApplyWithCvDialog } from "./ApplyWithCvDialog";
-import { setApplyContext, track } from "../../utils/analytics";
+import { applyFlow, setApplyContext, startGuestApply, track } from "../../utils/analytics";
 
-export const ApplyJobButtons: React.FC<ApplyJobButtonsProps> = ({jobId, isSelfApply, quickApply = true, openDirectApplyModal,handleGuestApply}) => {
+/*
+ * Ways to apply (utils/applyPolicy.ts):
+ *  - signed in: always the regular application (CV dialog; the job's regular-apply CV rule applies).
+ *    On a self-apply job the employer's details stay one click away.
+ *  - not signed in: self -> the employer's details (apply directly), quick -> the guest form, none -> sign in.
+ */
+export const ApplyJobButtons: React.FC<ApplyJobButtonsProps> = ({jobId, applyPolicy, openDirectApplyModal,handleGuestApply, hasThreshold = false, onExistingSite = false}) => {
+    const isSelfApply = applyPolicy.guestMode === 'self';
     const { initModal, storeCurrentModalAsPending } = useModalStore();
     const translations = i18n.getTranslations();
     const { user, setOpenLogin, updateJobApplication, setUser } = useAuthStore();
@@ -59,12 +67,20 @@ export const ApplyJobButtons: React.FC<ApplyJobButtonsProps> = ({jobId, isSelfAp
             setOpenLogin(true);
             return;
         }
-        // Signed in: choose the CV for this application, then apply.
+        // An account without the candidate role (an employer only) can't apply (server: the candidate routes refuse it);
+        // say so instead. Someone who is a candidate too applies as that candidate (several roles per account).
+        if (!isCandidateUser(user) && isEmployerUser(user)) {
+            showToast(translations.Employers.CannotApply, 'warning');
+            return;
+        }
+        // Signed in: choose the CV for this application, then apply. The apply funnel starts here.
+        applyFlow.start({ job_id: jobId, apply_type: 'registered', apply_mode: 'regular', cv_required: applyPolicy.regularCv === 'required', has_threshold: hasThreshold });
         initModal({
             active: true,
             modalBody: (
                 <ApplyWithCvDialog
                     jobId={jobId}
+                    cvRequired={applyPolicy.regularCv === 'required'}
                     onApplied={handleApplied}
                     onCancel={() => initModal({ active: false })}
                 />
@@ -76,29 +92,50 @@ export const ApplyJobButtons: React.FC<ApplyJobButtonsProps> = ({jobId, isSelfAp
         });
     };
 
+    // A job of the existing site: shown here, but applications to it are not taken here (owner, 23.11.2026).
+    if (onExistingSite) {
+        return (
+            <div className='d-flex justify-content-start align-items-center gap-3 flex-wrap'>
+                <p className='m-0 font-RubikRegular' role='status'>{translations.Profile.ExistingSiteJob}</p>
+                {isSelfApply && (
+                    <Button className="ps-3 pe-3 bg-color-white text-color-purple" onClick={() => openDirectApplyModal()}>
+                        {translations.ApplyPolicy.EmployerDetails}
+                    </Button>
+                )}
+            </div>
+        );
+    }
+
     return (
 
         <div className='d-flex justify-content-start align-items-center'>
             {
                 user ? (
                     <>
-                        <Button
-                            className="d-none d-sm-inline-block ps-5 bg-color-white text-color-purple"
-                            onClick={() => initModal({ active: false })}
-                        >
-                            { translations.JobCard.Close }
-                        </Button>
-                        <Button
-                            className="bg-color-purple-btn ms-3 ps-4 pe-4 pt-2 pb-2 fs-6 custom-button-width"
-                            onClick={() => {
-                                if (isSelfApply) {
+                        {isSelfApply ? (
+                            <Button
+                                className="ps-3 pe-3 bg-color-white text-color-purple"
+                                onClick={() => {
                                     track('apply_click', { job_id: jobId, apply_type: 'self_apply' });
                                     openDirectApplyModal();
-                                } else handleApplyJobClicked();
-                            }}
-                            disabled={isSelfApply ? false : isAlreadyApplied}
+                                }}
+                            >
+                                {translations.ApplyPolicy.EmployerDetails}
+                            </Button>
+                        ) : (
+                            <Button
+                                className="d-none d-sm-inline-block ps-5 bg-color-white text-color-purple"
+                                onClick={() => initModal({ active: false })}
+                            >
+                                { translations.JobCard.Close }
+                            </Button>
+                        )}
+                        <Button
+                            className="bg-color-purple-btn ms-3 ps-4 pe-4 pt-2 pb-2 fs-6 custom-button-width"
+                            onClick={handleApplyJobClicked}
+                            disabled={isAlreadyApplied}
                         >
-                            {isAlreadyApplied ? (isSelfApply ? translations.JobCard.ViewDetails : translations.JobCard.ApplicationSubmitted) : translations.JobCard.ApplyJob}
+                            {isAlreadyApplied ? translations.JobCard.ApplicationSubmitted : translations.JobCard.ApplyJob}
                         </Button>
                     </>
                 ) :
@@ -115,21 +152,24 @@ export const ApplyJobButtons: React.FC<ApplyJobButtonsProps> = ({jobId, isSelfAp
                             </Button>
                             <Button
                                 className="bg-color-purple-btn ms-3 ps-4 pe-4 pt-2 pb-2 fs-6 custom-button-width"
-                                // Without quick apply (or on a self-apply job) a guest must log in / register first.
+                                // self: the employer's details (apply directly); quick: the guest form; none: log in / register first.
                                 onClick={() => {
-                                    if (isSelfApply || !quickApply) {
-                                        track('apply_click', { job_id: jobId, apply_type: isSelfApply ? 'self_apply' : 'guest' });
+                                    if (isSelfApply) {
+                                        track('apply_click', { job_id: jobId, apply_type: 'self_apply' });
+                                        openDirectApplyModal();
+                                    } else if (applyPolicy.guestMode !== 'quick') {
+                                        track('apply_click', { job_id: jobId, apply_type: 'guest' });
                                         setApplyContext(jobId);
                                         track('login_prompt', { job_id: jobId, source: 'apply' });
                                         setOpenLogin(true);
                                     } else {
                                         track('apply_click', { job_id: jobId, apply_type: 'guest' });
+                                        startGuestApply(jobId, applyPolicy.quickCv === 'required', hasThreshold);
                                         handleGuestApply();
                                     }
                                 }}
-                                disabled={isSelfApply ? false : isAlreadyApplied}
                             >
-                                {isSelfApply ?  translations.JobCard.ApplyJob : translations.JobCard.ApplyJob}
+                                {translations.JobCard.ApplyJob}
                             </Button>
                         </>
 

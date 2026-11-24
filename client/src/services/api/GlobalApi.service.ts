@@ -7,6 +7,7 @@ import * as ApiInterfaces from '../../models/interfaces/Api.interfaces';
 import { i18n } from '../../i18n/I18n';
 import { ErrorManager } from '../errors/ErrorsManager.service';
 import useAuthStore from '../../store/Auth.store';
+import { setLastApiErrorCode } from '../../utils/lastApiError';
 
 const MAX_REQUESTS = 2;
 const MAX_RPS = 2;
@@ -68,6 +69,7 @@ class ApiService {
         } = {},
 
     ): Promise<T | string> {
+        setLastApiErrorCode(null);
         try {
             switch (method) {
                 case RequestEnum.Get:
@@ -159,8 +161,9 @@ class ApiService {
             if (typeof Blob !== 'undefined' && error instanceof Blob) {
                 try { error = JSON.parse(await error.text()); } catch { /* keep as is */ }
             }
-            // Security refusals (daily limit, activity log unavailable, cross-site) carry their own Hebrew message.
-            if (error && typeof error.code === 'string' && /^(limit_|audit_unavailable|cross_site)/.test(error.code) && error.message) {
+            setLastApiErrorCode(error?.code ?? (error === RequestEnum.ErrorBadRequest ? null : 'network'));
+            // Security refusals (daily limit, activity log unavailable, cross-site) and the threshold-condition refusal carry their own Hebrew message.
+            if (error && typeof error.code === 'string' && /^(limit_|audit_unavailable|cross_site|threshold_not_confirmed|candidate_read_only|job_on_existing_site)/.test(error.code) && error.message) {
                 return error.message;
             }
             this._interceptor(error);

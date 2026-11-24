@@ -51,7 +51,7 @@ const Toast: React.FC<ToastProps> = ({ open, message, severity = 'success', onCl
     <Snackbar
       anchorOrigin={{ vertical: 'bottom', horizontal: isRTL ? 'right' : 'left' }} 
       open={open}
-      autoHideDuration={6000}
+      autoHideDuration={severity === 'warning' ? 15000 : 6000}
       onClose={onClose}
       className="toast-snackbar"
     >

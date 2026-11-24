@@ -103,4 +103,8 @@ export interface MyProfile {
   hasPassword: boolean;
   ssoLinked: boolean;
   profileIncomplete: boolean;
+  /** A candidate of the existing site before the cutover: details shown, not editable, no applying. */
+  readOnly?: boolean;
+  /** server/src/controllers/profileController.ts view(): the two consent boxes. */
+  consent?: { termsCurrent: boolean; marketing: boolean | null; marketingAt: string | null };
 }

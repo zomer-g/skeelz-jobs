@@ -19,7 +19,9 @@ import { UserService } from '../../../services/api/User.service';
 import { UploadFileModal } from '../../common/UploadFileModal';
 import { WarningIcon } from '../../../icons';
 import { useProfileModals } from '../../register/profileModals';
-import { UserRole } from '../../../i18n/General.enums';
+import { UserRole, isCandidateUser, isEmployerUser } from '../../../i18n/General.enums';
+import { ClientRoutes } from '../../../i18n/ClientRoutes.enum';
+import LegacyReadOnlyDetails from './LegacyReadOnlyDetails';
 
 const JobsApplicationsManagement: React.FC = () => {
   const translations = i18n.getTranslations();
@@ -46,6 +48,8 @@ const JobsApplicationsManagement: React.FC = () => {
   const { showToast } = useToastStore();
   const [loading, setLoading] = useState(false);
   const { user } = useAuthStore();
+  // A candidate of the existing site before the cutover: view only (no edit, no CV upload or removal).
+  const [readOnly, setReadOnly] = useState(false);
   const setUser = useAuthStore.getState().setUser;
   const { initModal } = useModalStore();
   const { openEdit } = useProfileModals();
@@ -357,7 +361,12 @@ const JobsApplicationsManagement: React.FC = () => {
 
   return (
     <div>
-      {user?.role === UserRole.USER && (
+      {isCandidateUser(user) && <LegacyReadOnlyDetails onReadOnly={setReadOnly} />}
+      {/* Several roles per account (23.11.2026): the same account can post jobs as an employer too. */}
+      {isCandidateUser(user) && !isEmployerUser(user) && (
+        <p className="small pt-2 mb-0"><a href={ClientRoutes.JoinAsEmployer}>הצטרפות גם כמעסיק (באותו חשבון)</a></p>
+      )}
+      {isCandidateUser(user) && !readOnly && (
         <div className="d-flex justify-content-center justify-content-md-end pt-3">
           <Button
             type="button"
@@ -401,18 +410,18 @@ const JobsApplicationsManagement: React.FC = () => {
            >
              {translations.Cv.ViewCV}
            </Button>
-            <Button
+            {!readOnly && <Button
               type="button"
               className="btn h-2-5rem xs-h-2-2rem sm-h-3rem text-color-dark-green border-color-dark-green-2-2px rounded-pill width-7rem xs-w-6rem sm-w-7-5rem xs-fs-0-93rem mx-1 mx-lg-3"
               onClick={() => deleteCvModal()}
             >
               {translations.Cv.DeleteCV}
-            </Button>
+            </Button>}
           </Col> 
         </>
          :
          <Col md={5} xs={7} className="d-flex justify-content-end  pt-3 pt-md-0 ps-2">
-         <Button
+         {!readOnly && <Button
            type="button"
            className="btn h-2-5rem xs-h-2-2rem sm-h-3rem  text-color-dark-green border-color-dark-green-2-2px rounded-pill width-7rem xs-w-6rem sm-w-7-5rem"
            onClick={() => {
@@ -421,8 +430,8 @@ const JobsApplicationsManagement: React.FC = () => {
            }}}
          >
            {translations.Cv.UploadCvShortcut}
-         </Button>
-       </Col> 
+         </Button>}
+       </Col>
         }
       </Row>
 

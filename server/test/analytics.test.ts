@@ -11,7 +11,6 @@ import {
   utmFrom, errorCodeFrom, parseConsent, consentModeState, CONSENT_STORAGE_KEY, CONSENT_MAX_AGE_DAYS,
   GA_COOKIE_EXPIRES_SECONDS, GA_COOKIE_MONTHS, GA_RETENTION_MONTHS, GA_COOKIE_NAME, CONTEXT_KEYS,
 } from '../../client/src/utils/analyticsPolicy.ts';
-import { EVENT_LABELS, PARAM_LABELS } from '../../client/src/components/privacy/analyticsDisclosure.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..', '..');
@@ -35,6 +34,15 @@ test('unknown events are dropped', () => {
 test('unknown keys are dropped, even with harmless values', () => {
   const ev = buildEvent('apply_click', { job_id: JOB, email: PERSONAL.email, fullName: PERSONAL.name, phoneNumber: PERSONAL.phone, cvFileName: PERSONAL.cvFile, search: PERSONAL.freeText, apply_type: 'guest' } as any);
   assert.deepEqual(ev, { event: 'apply_click', job_id: JOB, apply_type: 'guest' });
+});
+
+test('login / sign_up keep the sign-in method the client sends (email_code, google, microsoft), nothing else', () => {
+  for (const m of ['email_code', 'google', 'microsoft']) {
+    assert.equal(buildEvent('login', { method: m })?.method, m, `login ${m}`);
+    assert.equal(buildEvent('sign_up', { method: m })?.method, m, `sign_up ${m}`);
+  }
+  assert.equal(buildEvent('login', { method: PERSONAL.email })?.method, undefined);
+  assert.deepEqual(buildEvent('job_publish', { job_id: JOB, title: PERSONAL.freeText } as any), { event: 'job_publish', job_id: JOB });
 });
 
 test('a key allowed on one event is not allowed on another', () => {
@@ -125,56 +133,32 @@ test('consent: parsed strictly, expires, ads never granted', () => {
   assert.equal(s.ad_personalization, 'denied');
 });
 
-test('server consent default matches the client (key, max age, default denied)', () => {
+test('server: measurement is notice-only (since 15.11.2026), ads never granted, Google loads only through the loader', () => {
   const src = read('server', 'src', 'index.ts');
-  assert.match(src, new RegExp(`localStorage.getItem\\('${CONSENT_STORAGE_KEY}'\\)`));
-  assert.match(src, new RegExp(`${CONSENT_MAX_AGE_DAYS}\\*864e5`));
-  assert.match(src, /gtag\('consent','default',\{analytics_storage:'denied',ad_storage:'denied',ad_user_data:'denied',ad_personalization:'denied'/);
+  assert.match(src, /gtag\('consent','default',\{analytics_storage:'granted',ad_storage:'denied',ad_user_data:'denied',ad_personalization:'denied'/);
   assert.match(src, /send_page_view:false/);
-  // Nothing from Google loads before consent: gtm.js / gtag.js are injected only inside
-  // window.__skeelzLoadAnalytics, which runs inline only for a stored accept (else the banner calls it).
+  // gtm.js / gtag.js are injected only inside window.__skeelzLoadAnalytics (with the nonce), called once on load.
   const fn = src.slice(src.indexOf('const analyticsSnippet'), src.indexOf('const contentSecurityPolicy'));
-  assert.doesNotMatch(fn, /<script[^>]*src=/, 'a Google script tag is written into the HTML before consent');
+  assert.doesNotMatch(fn, /<script[^>]*src=/, 'a Google script tag is written into the HTML directly');
   const ret = fn.slice(fn.indexOf('return `<script'));
   assert.ok(ret.indexOf("gtag('consent','default'") < ret.indexOf('window.__skeelzLoadAnalytics=function'), 'consent default must come first');
-  assert.match(ret, /analytics===true[^}]*\{gtag\('consent','update',\{analytics_storage:'granted'\}\);window\.__skeelzLoadAnalytics\(\);\}/);
-  assert.equal((ret.match(/__skeelzLoadAnalytics\(\)/g) || []).length, 1, 'loader is called inline only for a stored accept');
+  assert.equal((ret.match(/__skeelzLoadAnalytics\(\)/g) || []).length, 1, 'loader is called once, on load');
   assert.match(src, new RegExp(`GA_COOKIE_EXPIRES_SECONDS = ${GA_COOKIE_EXPIRES_SECONDS};`));
-  // client side: the loader is called only when accepting
+  // client side: no consent gate, and the notice (not a consent banner) is what the visitor sees
   const client = read('client', 'src', 'utils', 'analytics.ts');
-  const setConsent = client.slice(client.indexOf('export function setConsent'), client.indexOf('/** Withdrawal'));
-  assert.match(setConsent, /if \(analytics\) \{[\s\S]*?__skeelzLoadAnalytics\?\.\(\)[\s\S]*?\} else \{/);
-  assert.match(setConsent, /else \{\s*deleteGaCookies\(\);/);
+  assert.match(client, /export const hasAnalyticsConsent = \(\): boolean => true;/);
+  const app = read('client', 'src', 'App.tsx');
+  assert.ok(!app.includes('<ConsentBanner'), 'no consent banner');
+  assert.ok(app.includes('<NoticeBanner'), 'the notice is shown');
 });
 
-test('the privacy page states the consent period and names Google', () => {
-  const src = read('client', 'src', 'components', 'privacy', 'PrivacyPage.tsx');
-  const m = src.match(/PRIVACY_CONSENT_MONTHS = (\d+)/);
-  assert.ok(m, 'PRIVACY_CONSENT_MONTHS not found');
-  assert.equal(Number(m![1]) * 30 + 5, CONSENT_MAX_AGE_DAYS, 'privacy page months ≠ CONSENT_MAX_AGE_DAYS');
-  assert.match(src, /Google Analytics/);
-  assert.match(read('docs', 'privacy', 'database-definition.md'), /Google \(Google Analytics 4 דרך Google Tag Manager\)/);
-});
-
-test('privacy texts list exactly the allowlisted events and parameters (like PRIVACY_NUMBERS)', () => {
-  // Every event / parameter that can be sent has a Hebrew label, and no label is left for one that can't.
-  assert.deepEqual(Object.keys(EVENT_LABELS).sort(), Object.keys(EVENTS).sort(), 'EVENT_LABELS ≠ EVENTS');
-  assert.deepEqual(Object.keys(PARAM_LABELS).sort(), Object.keys(PARAM_CHECKS).sort(), 'PARAM_LABELS ≠ PARAM_CHECKS');
-  for (const [k, v] of Object.entries({ ...EVENT_LABELS, ...PARAM_LABELS })) assert.ok(v.trim().length > 2, k);
-  // The page builds its table from the allowlist itself (not a copy).
+test('the privacy page explains measurement: notice, cookies and their lifetime, how to opt out', () => {
+  // The policy describes measurement in one short paragraph; WHAT may be sent is enforced by the allowlist tests above.
   const page = read('client', 'src', 'components', 'privacy', 'PrivacyPage.tsx');
-  assert.match(page, /from '\.\.\/\.\.\/utils\/analyticsPolicy'/);
-  assert.match(page, /Object\.keys\(EVENTS\) as EventName\[\]\)\.map/);
-  assert.match(page, /EVENTS\[name\]\.map\(\(k\) => PARAM_LABELS\[k\]\)/);
-  assert.match(page, /CONTEXT_KEYS\.map/);
-  for (const must of ['Google Tag Manager', 'Consent Mode v2', '<code>_ga</code>', '_ga_&lt;', '{GA_COOKIE_MONTHS}', '{GA_RETENTION_MONTHS}', 'הגדרות עוגיות', 'מחוץ לישראל', 'אינה נרשמת ואינה נשמרת', 'מה לא נשלח']) {
+  assert.ok(!page.includes('אחרי שהסכמת'), 'the page must not say measurement waits for consent any more');
+  for (const must of ['id="analytics"', 'Google Analytics', 'הודעה', 'עוגיות', '{GA_COOKIE_MONTHS}', 'לחסום עוגיות']) {
     assert.ok(page.includes(must), `PrivacyPage.tsx misses "${must}"`);
   }
-  // The database definition document lists every event too.
-  const dd = read('docs', 'privacy', 'database-definition.md');
-  for (const name of Object.keys(EVENTS)) assert.ok(dd.includes('`' + name + '`'), `database-definition.md misses ${name}`);
-  for (const k of CONTEXT_KEYS) assert.ok(dd.includes('`' + k + '`'), `database-definition.md misses ${k}`);
-  assert.ok(dd.includes(`${GA_RETENTION_MONTHS} חודשים`) && dd.includes(`${GA_COOKIE_MONTHS} חודשים`) && dd.includes(String(GA_COOKIE_EXPIRES_SECONDS)));
 });
 
 test('cookie lifetime and retention: one value in code, page, setup guide and GTM container', () => {

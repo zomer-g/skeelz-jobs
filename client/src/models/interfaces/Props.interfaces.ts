@@ -24,6 +24,10 @@ export interface PaginationType {
 }
 export interface JobData {
   title: string;
+  /** Staff: answers to the job form's added fields (settings screen), by field id. */
+  customFields?: Record<string, string | boolean>;
+  /** Everyone: the added fields shown on the job page (label + value; server-made, never sent back). */
+  extraFields?: { label: string; value: string }[];
   location?: Location;
   locationPreview?: string;
   citySymbol: number,
@@ -44,29 +48,41 @@ export interface JobData {
   dateToDisplay?: string;
   isSponsored: boolean;
   isMarked: boolean;
+  /** The effective guest mode is 'self' (computed by the server; legacy field, also sent to Salesforce). */
   isSelfApply: boolean;
-  /** Admin override: null/undefined = inherit the site-wide default. */
-  quickApplyOverride?: boolean | null;
-  /** Admin override: null/undefined = inherit the site-wide default. */
-  quickApplyWithoutCvOverride?: boolean | null;
+  /** Content-manager overrides: null/undefined = inherit the site-wide default (utils/applyPolicy.ts). */
+  guestModeOverride?: GuestMode | null;
+  quickCvOverride?: CvRule | null;
+  regularCvOverride?: CvRule | null;
   /** Effective policy for this job, computed by the server. */
   applyPolicy?: ApplyPolicy;
   jobAppcreatedAt?: Date;
   externalLink?: string;
-  /** false = private (unlisted). Missing = public. */
-  isPublic?: boolean;
+  /** תנאי סף: plain text the candidate confirms before applying; null/'' = none (server thresholdCondition.ts). */
+  thresholdCondition?: string | null;
+  /** A job of the existing site (imported, or mirrored until the cutover): shown, but takes no applications here. */
+  onExistingSite?: boolean;
   /** Pinned to the top of the board since; null = not pinned. */
   pinnedAt?: Date | string | null;
+  /** Imported from the existing site: read-only here (the server refuses every change, 409 job_read_only). */
+  importedFromLive?: boolean;
+  /** Last bump (הקפצה): listed as if published then. */
+  bumpedAt?: Date | string | null;
   /** Archived (soft-deleted) at; content managers only. */
   deletedAt?: Date | string | null;
   /** Sent with a future publishDate: scheduled publishing. Not stored. */
   schedulePublish?: boolean;
 }
 
-/** Whether guests may apply without registering, and whether they may skip the CV. */
+/** How a visitor who is not signed in applies: self = directly to the employer, quick = guest form, none = sign in. */
+export type GuestMode = 'self' | 'quick' | 'none';
+export type CvRule = 'required' | 'optional';
+
+/** Ways to apply and CV rules (server: models/schemas/applyPolicy.ts). */
 export interface ApplyPolicy {
-  quickApply: boolean;
-  quickApplyWithoutCv: boolean;
+  guestMode: GuestMode;
+  quickCv: CvRule;
+  regularCv: CvRule;
 }
 
 export interface Location {
@@ -93,13 +109,15 @@ export interface RegisterFormValues {
   firstName: string;
   gender: Gender | null;
   dateOfBirth: Date | null;
+  /** Israeli ID number (optional unless the sign-up fields setting requires it). */
+  idNumber?: string;
   phoneNumber: string;
   citySymbol: number;
-  password: string;
-  confirmPassword?: string;
   skills?: string[];
   cvFileUrl?: string;
   hasAppliedToJob: boolean;
+  /** Answers to the added sign-up fields (settings screen), by field id. */
+  customFields?: Record<string, string | boolean>;
 }
 
 export interface guestApplyValues {
@@ -107,6 +125,9 @@ export interface guestApplyValues {
   fullName: string;
   phoneNumber: string;
   cvFilePath: string;
+  /** Required terms box / optional marketing box (server/src/security/consent.ts). */
+  consent: boolean;
+  marketingConsent: boolean;
 }
 
 export interface EditUserValues {
@@ -127,6 +148,8 @@ export interface User {
   password?: string;
   skills: string[];
   role: UserRole;
+  /** The roles this session carries (several per account since 23.11.2026); `role` is the highest. */
+  roles?: UserRole[];
   jobApplicationsId: string[];
   cvFileUrl?: string;
 }
@@ -137,6 +160,8 @@ export interface Guest {
   fullName: string;
   email: string;
   cvFilePath?: string;
+  consent?: boolean;
+  marketingConsent?: boolean;
 }
 
 export interface JobApplication {
@@ -148,18 +173,16 @@ export interface JobApplication {
 
 export interface ApplyJobButtonsProps {
   jobId: string;
-  isSelfApply: boolean;
-  /** Effective quick-apply policy for guests (defaults to on when unknown). */
-  quickApply?: boolean;
+  /** Effective policy (utils/applyPolicy.effectiveApplyPolicy). */
+  applyPolicy: ApplyPolicy;
   openDirectApplyModal: () => void;
   handleGuestApply: () => void;
+  /** Analytics only: the job has a threshold condition (never its text). */
+  hasThreshold?: boolean;
+  /** A job of the existing site: no application is taken here (server 409 job_on_existing_site). */
+  onExistingSite?: boolean;
 }
 
-
-export interface LoginFormValues {
-  email: string;
-  password: string;
-}
 
 export interface LoginResponse {
   accessToken: string;
@@ -175,6 +198,8 @@ export interface JobInfoData {
   title: string;
   info: string;
   infoUrl?: boolean;
+  /** Show the whole value (e.g. an employer's email on a self-apply job) instead of cutting it at 25 characters. */
+  noTruncate?: boolean;
 }
 
 export interface JobCardData {
@@ -192,7 +217,6 @@ export interface filterOptions {
   inputValue?: string;
   sortField?: string | null;
   sortOrder?: string | null;
-  visibility?: 'public' | 'private';
   pinned?: boolean;
   scheduled?: boolean;
   archived?: 'only' | 'include';

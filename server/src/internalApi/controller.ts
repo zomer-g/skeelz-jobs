@@ -11,10 +11,11 @@ import { actorOf, writeAudit } from '../security/audit.js';
 import { cvHandover, peopleHandover } from '../security/handover.js';
 import { isObjectId } from '../utils/ids.js';
 import { JobStatus } from '../models/enums.js';
-import { takePublishDate } from '../controllers/jobController.js';
+import { takePublishDate, takeThresholdCondition } from '../controllers/jobController.js';
 import { SCREEN_ONLY_FIELDS } from '../models/schemas/jobBoard.js';
 import { getApplication, getCandidate, candidateCvKey, listApplications, listCandidates, paging, parseSince } from './data.js';
 import { SyncKind, isSyncKind, pendingIds, pushRecords, salesforceEnabled, syncState } from './salesforcePush.js';
+import { isAuthErrorCode } from './pure.js';
 
 const bad = (res: Response, message: string, status = 400, code = 'bad_request') => res.status(status).json({ message, code });
 const notFound = (res: Response) => bad(res, 'Not found', 404, 'not_found');
@@ -49,10 +50,12 @@ export const getJob = async (req: Request, res: Response, next: NextFunction) =>
 
 export const createJob = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // Pin / visibility / archive are set only on the jobs-management screen (docs/jobs-management.md).
+    // Pin / bump / archive are set only on the jobs-management screen (docs/jobs-management.md).
     for (const f of SCREEN_ONLY_FIELDS) delete req.body?.[f];
     const dateError = takePublishDate(req.body, true);
     if (dateError) return bad(res, `publishDate: ${dateError}`, 400, `publish_date_${dateError}`);
+    const thresholdError = takeThresholdCondition(req.body);
+    if (thresholdError) return bad(res, `thresholdCondition: ${thresholdError}`, 400, `threshold_condition_${thresholdError}`);
     const job: any = await jobsService.createJob(req.body, 'integration');
     void writeAudit(actorOf(req), 'job.created', String(job?._id ?? ''), { title: String(req.body?.title ?? '').slice(0, 200), via: 'internal_api' });
     res.status(201).json({ data: job });
@@ -65,6 +68,8 @@ export const updateJob = async (req: Request, res: Response, next: NextFunction)
     if (!isObjectId(id)) return notFound(res);
     const dateError = takePublishDate(req.body);
     if (dateError) return bad(res, `publishDate: ${dateError}`, 400, `publish_date_${dateError}`);
+    const thresholdError = takeThresholdCondition(req.body);
+    if (thresholdError) return bad(res, `thresholdCondition: ${thresholdError}`, 400, `threshold_condition_${thresholdError}`);
     // An integration never overwrites what a content manager set on the jobs-management screen.
     const r = await jobsService.updateJobByIdDetailed(id, req.body, 'integration');
     if (!r?.job) return notFound(res);
@@ -84,8 +89,8 @@ export const listCandidatesH = async (req: Request, res: Response, next: NextFun
     const search = String(req.query.search ?? '').slice(0, 100) || undefined;
     let total = 0;
     const { rows, cut } = await peopleHandover({
-      who: actorOf(req), action: 'candidates.shown', place: place(req),
-      details: { filters: { search, hasCv, updatedSince: updatedSince?.toISOString() }, page: pg.page, limit: pg.limit },
+      who: actorOf(req), budgetOwner: req.apiClient?.budgetOwner, action: 'candidates.shown', place: place(req),
+      details: { filters: { search: search ? true : undefined, hasCv, updatedSince: updatedSince?.toISOString() }, page: pg.page, limit: pg.limit },
       load: async () => { const r = await listCandidates({ search, hasCv, updatedSince, ...pg }); total = r.total; return r.rows; },
       idOf: (c) => c.id,
     });
@@ -98,7 +103,7 @@ export const getCandidateH = async (req: Request, res: Response, next: NextFunct
   try {
     let found = true;
     const { rows } = await peopleHandover({
-      who: actorOf(req), action: 'candidates.shown', place: place(req), details: { subject: String(req.params.id).slice(0, 40) },
+      who: actorOf(req), budgetOwner: req.apiClient?.budgetOwner, action: 'candidates.shown', place: place(req), details: { subject: String(req.params.id).slice(0, 40) },
       load: async () => { const c = await getCandidate(String(req.params.id)); found = !!c; return c ? [c] : []; },
       idOf: (c) => c.id,
     });
@@ -121,7 +126,7 @@ export const listApplicationsH = async (req: Request, res: Response, next: NextF
     if ((jobId && !isObjectId(jobId)) || (candidateId && !isObjectId(candidateId))) return bad(res, 'jobId / candidateId: 24-hex ids');
     let total = 0;
     const { rows, cut } = await peopleHandover({
-      who: actorOf(req), action: 'candidate.applications_viewed', place: place(req),
+      who: actorOf(req), budgetOwner: req.apiClient?.budgetOwner, action: 'candidate.applications_viewed', place: place(req),
       details: { filters: { jobId, candidateId, since: since?.toISOString() }, page: pg.page, limit: pg.limit },
       load: async () => { const r = await listApplications({ jobId, candidateId, since, ...pg }); total = r.total; return r.rows; },
       idOf: (a) => a.candidateId,
@@ -135,7 +140,7 @@ export const getApplicationH = async (req: Request, res: Response, next: NextFun
   try {
     let found = true;
     const { rows } = await peopleHandover({
-      who: actorOf(req), action: 'candidate.applications_viewed', place: place(req), details: { application: String(req.params.id).slice(0, 40) },
+      who: actorOf(req), budgetOwner: req.apiClient?.budgetOwner, action: 'candidate.applications_viewed', place: place(req), details: { application: String(req.params.id).slice(0, 40) },
       load: async () => { const a = await getApplication(String(req.params.id)); found = !!a; return a ? [stripKey(a)] : []; },
       idOf: (a) => a.candidateId,
     });
@@ -148,7 +153,7 @@ export const getApplicationH = async (req: Request, res: Response, next: NextFun
 // ---- CV files (cvHandover: daily CV limit, strict entry before the file is sent) ----
 const sendCv = async (req: Request, res: Response, subjectId: string, key: string) => {
   const file = await cvHandover({
-    who: actorOf(req), subjectId, place: place(req),
+    who: actorOf(req), budgetOwner: req.apiClient?.budgetOwner, subjectId, place: place(req),
     open: () => getStoredFile(key),
     abort: (f) => f.stream.destroy(),
     details: (f) => ({ type: f.contentType }),
@@ -216,7 +221,7 @@ export const pushPending = async (req: Request, res: Response, next: NextFunctio
       const r = await pushRecords(actorOf(req), kind, ids, place(req));
       results.push(...r);
       left -= r.length;
-      if (r.some((x) => x.error === 'auth')) break;
+      if (r.some((x) => isAuthErrorCode(x.error))) break;
     }
     res.json({ data: { pushed: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, results } });
   } catch (e) { next(e); }

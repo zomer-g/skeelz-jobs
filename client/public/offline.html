@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<!-- Shown by the service worker (sw.js) when a page cannot be loaded because there is no connection. docs/pwa.md -->
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex" />
+  <meta name="theme-color" content="#ffffff" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+  <title>אין חיבור לאינטרנט | SKEELZ</title>
+  <style>
+    html, body { margin: 0; height: 100%; }
+    body {
+      display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+      background: #fff; color: #1d1d1b; text-align: center; padding: 1.5rem; box-sizing: border-box;
+    }
+    main { max-width: 26rem; }
+    img { width: 140px; height: auto; margin-bottom: 2rem; }
+    h1 { font-size: 1.6rem; margin: 0 0 0.75rem; }
+    p { font-size: 1.1rem; line-height: 1.6; margin: 0 0 1.75rem; }
+    a.retry {
+      display: inline-block; padding: 0.7rem 2rem; border-radius: 999px;
+      background: #005e5c; color: #fff; font-size: 1.1rem; font-weight: 600; text-decoration: none;
+    }
+    a.retry:hover { background: #004442; }
+    a.retry:focus-visible { outline: 3px solid #005e5c; outline-offset: 3px; }
+  </style>
+</head>
+<body>
+  <main>
+    <img src="/images/logo.svg" alt="SKEELZ" />
+    <h1>אין חיבור לאינטרנט</h1>
+    <p>לא הצלחנו לפתוח את הדף. בדקו שיש חיבור לאינטרנט ונסו שוב.</p>
+    <!-- href="" = this same address again (the worker answered the page's own address with this file). -->
+    <a class="retry" href="">נסו שוב</a>
+  </main>
+</body>
+</html>

@@ -26,24 +26,29 @@ const fullJob = (over = {}) => ({
   externalLink: 'https://example.test/apply', uploadBy: 'admin@example.test', status: 'Active', comments: 'internal note',
   location: { _id: '5000', city: 'תל אביב - יפו', district: 'תל אביב', lat: 32.08, lng: 34.78, identifier: 1 },
   requiredSkills: ['bbbbbbbbbbbbbbbbbbbbbbbb'], requiredSkillsDetails: { bbbbbbbbbbbbbbbbbbbbbbbb: 'Excel' },
-  isSponsored: true, isMarked: true, isSelfApply: true, quickApplyOverride: false, quickApplyWithoutCvOverride: false,
-  applyPolicy: { quickApply: true, quickApplyWithoutCv: true }, dateToDisplay: 'today',
+  isSponsored: true, isMarked: true, isSelfApply: false, guestModeOverride: 'none', quickCvOverride: 'required', regularCvOverride: 'required',
+  applyPolicy: { guestMode: 'quick', quickCv: 'required', regularCv: 'required' }, dateToDisplay: 'today',
   createdAt: new Date(), updatedAt: new Date(), salesforceId: '500XX', newColumnFromTheFuture: 'secret',
+  // Added job fields (settings screen): the staff map never goes out; only the job-page list does, label + value only.
+  customFields: { aaaaaaaaaaaaaaaaaaaaaaab: 'staff-only answer' }, extraFields: [{ label: 'שכר', value: '40 ₪', id: 'leak-id', active: true }],
   ...over,
 });
 
 test('toPublicJob returns exactly the allowlisted keys (fails if a field appears)', () => {
   const j = pub.toPublicJob(fullJob());
   assert.deepEqual(sorted(Object.keys(j)), sorted([
-    'id', 'jobNumber', 'title', 'companyName', 'description', 'jobScope', 'publishDate', 'location', 'skills', 'isSponsored', 'externalLink', 'url',
+    'id', 'jobNumber', 'title', 'companyName', 'description', 'jobScope', 'publishDate', 'location', 'skills', 'isSponsored', 'isPinned', 'externalLink', 'applyMode', 'applyContact', 'thresholdCondition', 'extraFields', 'url',
   ]));
   assert.deepEqual(sorted(Object.keys(j)), sorted(pub.PUBLIC_JOB_KEYS));
   assert.deepEqual(sorted(Object.keys(j.location)), sorted(pub.PUBLIC_LOCATION_KEYS));
   assert.deepEqual(sorted(Object.keys(j.skills[0])), sorted(pub.PUBLIC_SKILL_KEYS));
   const text = JSON.stringify(j);
-  for (const secret of ['Dana', '050-0000000', 'dana@example.test', 'internal note', 'admin@example.test', '500XX', 'secret', 'quickApply']) {
+  assert.deepEqual(j.extraFields, [{ label: 'שכר', value: '40 ₪' }]);
+  for (const secret of ['Dana', '050-0000000', 'dana@example.test', 'internal note', 'admin@example.test', '500XX', 'secret', 'Override', 'required', 'quickCv', 'regularCv', 'staff-only answer', 'leak-id']) {
     assert.ok(!text.includes(secret), `leaked ${secret}`);
   }
+  assert.equal(j.applyMode, 'quick');
+  assert.equal(j.applyContact, null); // not a self-apply job: no employer contact
   assert.equal(j.url, 'https://jobs.skeelz.co.il/job/aaaaaaaaaaaaaaaaaaaaaaaa');
   assert.deepEqual(j.skills, [{ id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'Excel' }]);
 });
@@ -54,7 +59,24 @@ test('minimal job: same key set, nulls instead of missing fields', () => {
   assert.deepEqual(sorted(Object.keys(j)), sorted(pub.PUBLIC_JOB_KEYS));
   assert.equal(j.location, null);
   assert.equal(j.externalLink, null);
+  assert.deepEqual(j.extraFields, []);
   assert.equal(pub.toPublicJob(fullJob({ externalLink: 'javascript:alert(1)' })).externalLink, null);
+});
+
+test('self-apply job: applyContact carries only name, email, phone (as stored for applicants)', () => {
+  const j = pub.toPublicJob(fullJob({ isSelfApply: true, applyPolicy: { guestMode: 'self', quickCv: 'optional', regularCv: 'required' } }));
+  assert.equal(j.applyMode, 'self');
+  assert.deepEqual(sorted(Object.keys(j.applyContact)), sorted(pub.PUBLIC_APPLY_CONTACT_KEYS));
+  assert.deepEqual(j.applyContact, { name: 'Dana', email: 'dana@example.test', phone: '050-0000000' });
+  for (const secret of ['internal note', 'admin@example.test', 'regularCv', 'Override']) assert.ok(!JSON.stringify(j).includes(secret), secret);
+  // No contact stored: null rather than an empty object; a bad email is dropped.
+  const none = pub.toPublicJob(fullJob({ contactPersonName: '', contactPersonPhone: null, contactPersonEmail: 'not-an-email',
+    applyPolicy: { guestMode: 'self', quickCv: 'optional', regularCv: 'optional' } }));
+  assert.equal(none.applyContact, null);
+  // guest mode none: no contact, mode none
+  const closed = pub.toPublicJob(fullJob({ applyPolicy: { guestMode: 'none', quickCv: 'optional', regularCv: 'optional' } }));
+  assert.equal(closed.applyMode, 'none');
+  assert.equal(closed.applyContact, null);
 });
 
 test('near job adds only distanceKm', () => {
@@ -74,18 +96,18 @@ test('only Active jobs are public: pending / private / suspended / closed / reje
   assert.equal(service.PUBLIC_JOB_WHERE, "j.status = 'Active'");
 });
 
-test('private, archived and not-yet-published (scheduled) jobs are never public', () => {
-  assert.equal(pub.toPublicJob(fullJob({ isPublic: false })), null, 'private leaked');
+test('archived and not-yet-published (scheduled) jobs are never public; the retired isPublic flag changes nothing', () => {
+  assert.ok(pub.toPublicJob(fullJob({ isPublic: false })), 'the status alone decides (no private jobs)');
   assert.equal(pub.toPublicJob(fullJob({ deletedAt: new Date() })), null, 'archived leaked');
   assert.equal(pub.toPublicJob(fullJob({ publishDate: new Date(Date.now() + 86_400_000) })), null, 'scheduled leaked');
-  assert.equal(pub.toPublicNearJob({ ...fullJob({ isPublic: false }), distanceKm: 1 }), null);
   assert.ok(pub.toPublicJob(fullJob({ isPublic: true, pinnedAt: new Date() })), 'a pinned public job is public');
   // The pin, visibility and archive fields are not part of the public shape.
   const j = pub.toPublicJob(fullJob({ pinnedAt: new Date(), isPublic: true, deletedAt: null, managedFields: ['isSponsored'] }));
   for (const k of ['pinnedAt', 'isPublic', 'deletedAt', 'managedFields', 'deletedBy']) assert.ok(!(k in j), `${k} leaked`);
   // The list queries carry the same rule.
   assert.deepEqual(service.PUBLIC_WHERE.slice(0, 1), ["j.status = 'Active'"]);
-  assert.match(service.PUBLIC_WHERE[1], /is_public = true AND j\.deleted_at IS NULL AND j\.publish_date <= now\(\)/);
+  assert.match(service.PUBLIC_WHERE[1], /j\.status = 'Active' AND j\.deleted_at IS NULL AND j\.publish_date <= now\(\)/);
+  assert.ok(!/is_public/.test(service.PUBLIC_WHERE.join(' ')), 'is_public is no longer read');
 });
 
 test('location and skill shapes are allowlists', () => {

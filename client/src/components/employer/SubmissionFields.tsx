@@ -12,6 +12,8 @@ import useLanguageStore from '../../store/Language.store';
 import { LocationService } from '../../services/api/Location.service';
 import { SkillsService } from '../../services/api/Skills.service';
 import { isString } from '../../utils/utils';
+import CustomFieldInputs from '../common/CustomFieldInputs';
+import { customErrors, FormField, getPublicJobFields, loadPublicJobFields } from '../../utils/customFields';
 
 export interface SubmissionValues {
   title: string;
@@ -25,26 +27,32 @@ export interface SubmissionValues {
   contactName: string;
   contactEmail: string;
   contactPhone: string;
+  /** תנאי סף (optional, plain text): the candidate confirms it before applying. */
+  thresholdCondition: string;
+  /** Answers to the job form's added fields (settings screen), by field id. */
+  customFields?: Record<string, string | boolean>;
 }
-export type FieldName = keyof SubmissionValues | 'consent';
+export type FieldName = Exclude<keyof SubmissionValues, 'customFields'> | 'consent';
 export type ErrorCode = 'required' | 'too_short' | 'too_long' | 'invalid';
-export type Errors = Partial<Record<FieldName, ErrorCode>>;
+/** An added field's error is keyed `customFields.<id>` (as the server answers). */
+export type Errors = Partial<Record<FieldName | `customFields.${string}`, ErrorCode>>;
 
 export const EMPTY_VALUES: SubmissionValues = {
   title: '', companyName: '', citySymbol: '', jobScope: [], requiredSkills: [], description: '',
-  externalLink: '', publicEmail: '', contactName: '', contactEmail: '', contactPhone: '',
+  externalLink: '', publicEmail: '', contactName: '', contactEmail: '', contactPhone: '', thresholdCondition: '',
 };
 
 // Same caps as the server (SUBMISSION_FIELD_LIMITS).
 export const LIMITS = {
   title: [2, 30], companyName: [2, 28], description: [30, 5000], contactName: [2, 70], externalLink: [0, 500],
-  email: [0, 254], phoneDigits: [9, 15], skills: [1, 15],
+  email: [0, 254], phoneDigits: [9, 15], skills: [1, 15], thresholdCondition: [3, 500],
 } as const;
 
 const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
-/** Client-side check (the server decides). `consent` is checked only on the public form. */
-export const validate = (v: SubmissionValues, opts: { consent?: boolean } = {}): Errors => {
+/** Client-side check (the server decides). `consent` is checked only on the public form; `contact: false` skips the
+ *  contact fields (an employer's edit request has none). */
+export const validate = (v: SubmissionValues, opts: { consent?: boolean; contact?: boolean; onlyJobPageExtra?: boolean } = {}): Errors => {
   const e: Errors = {};
   const len = (k: 'title' | 'companyName' | 'contactName' | 'description', [min, max]: readonly [number, number]) => {
     const s = v[k].trim();
@@ -68,6 +76,12 @@ export const validate = (v: SubmissionValues, opts: { consent?: boolean } = {}):
     if (link.length > LIMITS.externalLink[1]) e.externalLink = 'too_long';
   }
   if (v.publicEmail.trim() && !EMAIL_RE.test(v.publicEmail.trim())) e.publicEmail = 'invalid';
+  const threshold = (v.thresholdCondition ?? '').trim();
+  if (threshold && threshold.length < LIMITS.thresholdCondition[0]) e.thresholdCondition = 'too_short';
+  else if (threshold.length > LIMITS.thresholdCondition[1]) e.thresholdCondition = 'too_long';
+  // The added job fields (same rule as the server's checkCustomValues).
+  for (const [id, code] of Object.entries(customErrors(getPublicJobFields(opts.onlyJobPageExtra), v.customFields))) e[`customFields.${id}`] = code;
+  if (opts.contact === false) { return e; }
   len('contactName', LIMITS.contactName);
   if (!e.contactName && /\d/.test(v.contactName)) e.contactName = 'invalid';
   if (!v.contactEmail.trim()) e.contactEmail = 'required';
@@ -84,7 +98,7 @@ export const validate = (v: SubmissionValues, opts: { consent?: boolean } = {}):
 
 /** Order of the fields on the page (focus goes to the first invalid one). */
 export const FIELD_ORDER: FieldName[] = ['title', 'companyName', 'citySymbol', 'jobScope', 'requiredSkills', 'description',
-  'externalLink', 'publicEmail', 'contactName', 'contactEmail', 'contactPhone', 'consent'];
+  'externalLink', 'publicEmail', 'thresholdCondition', 'contactName', 'contactEmail', 'contactPhone', 'consent'];
 
 export const fieldId = (prefix: string, k: FieldName) => `${prefix}-${k}`;
 
@@ -94,6 +108,7 @@ export const useFieldLabels = (): Record<FieldName, string> => {
     title: t.JobTitle, companyName: t.CompanyName, citySymbol: t.City, jobScope: t.JobScope, requiredSkills: t.Skills,
     description: t.Description, externalLink: t.ExternalLink, publicEmail: t.PublicEmail, contactName: t.ContactName,
     contactEmail: t.ContactEmail, contactPhone: t.ContactPhone, consent: t.ConsentLink,
+    thresholdCondition: i18n.getTranslations().Threshold.Label,
   };
 };
 
@@ -106,14 +121,18 @@ export const errorText = (code?: ErrorCode): string => {
 export const ErrorSummary: React.FC<{ errors: Errors; prefix: string; summaryRef?: React.Ref<HTMLDivElement> }> = ({ errors, prefix, summaryRef }) => {
   const t = i18n.getTranslations().EmployerForm;
   const labels = useFieldLabels();
+  const custom = getPublicJobFields().filter((f) => errors[`customFields.${f.id}`]);
   const keys = FIELD_ORDER.filter((k) => errors[k]);
-  if (!keys.length) return null;
+  if (!keys.length && !custom.length) return null;
   return (
     <div ref={summaryRef} tabIndex={-1} role="alert" className="alert alert-danger">
       <p className="mb-1 font-RubikMedium">{t.ErrorSummary}</p>
       <ul className="mb-0">
         {keys.map((k) => (
           <li key={k}><a href={`#${fieldId(prefix, k)}`}>{labels[k]}: {errorText(errors[k])}</a></li>
+        ))}
+        {custom.map((f) => (
+          <li key={f.id}><a href={`#${prefix}-cf-${f.id}`}>{f.label}: {errorText(errors[`customFields.${f.id}`])}</a></li>
         ))}
       </ul>
     </div>
@@ -128,14 +147,21 @@ interface FieldsProps {
   errors: Errors;
   onChange: (patch: Partial<SubmissionValues>) => void;
   disabled?: boolean;
+  /** false: no contact section (an employer's edit request). */
+  showContact?: boolean;
+  /** An employer's edit request: only the added fields shown on the job page. */
+  onlyJobPageExtra?: boolean;
 }
 
-const SubmissionFields: React.FC<FieldsProps> = ({ prefix, values, errors, onChange, disabled }) => {
+const SubmissionFields: React.FC<FieldsProps> = ({ prefix, values, errors, onChange, disabled, showContact = true, onlyJobPageExtra = false }) => {
   const t = i18n.getTranslations().EmployerForm;
+  const tt = i18n.getTranslations().Threshold;
   const { currentLanguage } = useLanguageStore();
   const [cities, setCities] = useState<{ citySymbol: number; city: string }[]>([]);
   const [skills, setSkills] = useState<{ _id: string; name: string }[]>([]);
   const [skillFilter, setSkillFilter] = useState('');
+  const [jobFields, setJobFields] = useState<FormField[]>(getPublicJobFields(onlyJobPageExtra));
+  useEffect(() => { loadPublicJobFields().then(() => setJobFields(getPublicJobFields(onlyJobPageExtra))); }, [onlyJobPageExtra]);
   const scopes = useMemo(() => getLocalizedOptions(LocalizedDataKey.JOB_SCOPE, currentLanguage), [currentLanguage]);
 
   useEffect(() => {
@@ -156,7 +182,7 @@ const SubmissionFields: React.FC<FieldsProps> = ({ prefix, values, errors, onCha
   const Err = ({ k }: { k: FieldName }) =>
     errors[k] ? <div id={errId(k)} className="text-danger small mt-1">{errorText(errors[k])}</div> : null;
 
-  const text = (k: keyof SubmissionValues, label: string, opts: { required?: boolean; type?: string; max?: number; autoComplete?: string; dir?: string } = {}) => (
+  const text = (k: Exclude<keyof SubmissionValues, 'customFields'>, label: string, opts: { required?: boolean; type?: string; max?: number; autoComplete?: string; dir?: string } = {}) => (
     <div className="mb-3">
       <label htmlFor={id(k)} className="form-label font-RubikRegular">{opts.required && <Req />} {label}</label>
       <input
@@ -252,16 +278,38 @@ const SubmissionFields: React.FC<FieldsProps> = ({ prefix, values, errors, onCha
           <div className="col-md-6">{text('externalLink', t.ExternalLink, { type: 'url', max: LIMITS.externalLink[1], dir: 'ltr' })}</div>
           <div className="col-md-6">{text('publicEmail', t.PublicEmail, { type: 'email', max: LIMITS.email[1], dir: 'ltr' })}</div>
         </div>
+        <div className="mb-1">
+          <label htmlFor={id('thresholdCondition')} className="form-label font-RubikRegular">{tt.Label}</label>
+          <textarea id={id('thresholdCondition')} name="thresholdCondition" className="form-control border-color-grey-2" rows={2}
+            maxLength={LIMITS.thresholdCondition[1]} disabled={disabled} value={values.thresholdCondition ?? ''}
+            placeholder={tt.FieldPlaceholder}
+            onChange={(e) => onChange({ thresholdCondition: e.target.value })} {...aria('thresholdCondition', `${id('thresholdCondition')}-hint`)} />
+          <div id={`${id('thresholdCondition')}-hint`} className="small text-muted">
+            {tt.FieldHint} {(values.thresholdCondition ?? '').trim().length}/{LIMITS.thresholdCondition[1]} {t.Characters}
+          </div>
+          <Err k="thresholdCondition" />
+        </div>
       </fieldset>
 
-      <fieldset className="mb-3">
+      {/* Details content managers added to the job form (settings screen); the server checks the same rules. */}
+      {jobFields.length > 0 && (
+        <fieldset className="mb-4">
+          <legend className="fs-5 font-RubikBold">{t.ExtraSection}</legend>
+          <CustomFieldInputs fields={jobFields} values={values.customFields} idPrefix={prefix}
+            errors={Object.fromEntries(jobFields.filter((f) => errors[`customFields.${f.id}`]).map((f) => [f.id, errors[`customFields.${f.id}`] === 'required' ? 'required' : 'invalid']))}
+            requiredText={t.Required} invalidText={t.Invalid}
+            onChange={(id, value) => onChange({ customFields: { ...(values.customFields ?? {}), [id]: value } })} />
+        </fieldset>
+      )}
+
+      {showContact && <fieldset className="mb-3">
         <legend className="fs-5 font-RubikBold">{t.ContactSection}</legend>
         <div className="row">
           <div className="col-md-4">{text('contactName', t.ContactName, { required: true, max: LIMITS.contactName[1], autoComplete: 'name' })}</div>
           <div className="col-md-4">{text('contactEmail', t.ContactEmail, { required: true, type: 'email', max: LIMITS.email[1], autoComplete: 'email', dir: 'ltr' })}</div>
           <div className="col-md-4">{text('contactPhone', t.ContactPhone, { required: true, type: 'tel', max: 20, autoComplete: 'tel', dir: 'ltr' })}</div>
         </div>
-      </fieldset>
+      </fieldset>}
     </>
   );
 };

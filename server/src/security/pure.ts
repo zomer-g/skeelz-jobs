@@ -4,24 +4,71 @@
  *  around these.
  * ========================================================================== */
 
-/** Daily budgets per content manager (the only role that sees candidates). One place: the code, the refusal text, the admin
- *  screen and the privacy texts all read these numbers. */
+/** Daily budgets. `cvs` / `people`: per staff member who sees candidates (content managers and admins).
+ *  `employerCvs` / `employerPeople`: per employer account, for the applicants the SKEELZ team forwarded to them
+ *  (docs/employers.md "Applicants"); their own budgets, never shared with staff, and no grants (grant 0).
+ *  One place: the code, the refusal text, the admin screen and the privacy texts all read these numbers. */
 export const LIMITS = {
   /** CV files opened (download or preview). */
   cvs: { daily: 40, alertAt: 20, grant: 40 },
   /** Candidates whose details were shown (each person once a day) or opened. */
   people: { daily: 1500, alertAt: 750, grant: 1500 },
+  /** An employer: CVs of forwarded applicants opened. */
+  employerCvs: { daily: 30, alertAt: 15, grant: 0 },
+  /** An employer: forwarded applicants shown (each person once a day). */
+  employerPeople: { daily: 200, alertAt: 100, grant: 0 },
 } as const;
 export type Budget = keyof typeof LIMITS;
+/** Budgets an admin may top up for the day (staff only; an employer's limit is never raised). */
+export const GRANTABLE_BUDGETS: readonly Budget[] = ['cvs', 'people'];
+export const STAFF_BUDGETS: readonly Budget[] = ['cvs', 'people'];
+export const EMPLOYER_BUDGETS: readonly Budget[] = ['employerCvs', 'employerPeople'];
 
 /** Audit actions that spend each budget (sum of details.count since local midnight). */
 export const BUDGET_ACTIONS: Record<Budget, readonly string[]> = {
   cvs: ['candidate.cv_opened'],
   people: ['candidates.shown', 'candidate.applications_viewed'],
+  employerCvs: ['employer.cv_opened'],
+  employerPeople: ['employer.applicants_shown'],
 };
 
-/** Actions whose details.ids mark a candidate as "already seen today" by that content manager. */
-export const SEEN_ACTIONS: readonly string[] = ['candidates.shown', 'candidate.applications_viewed', 'candidate.cv_opened'];
+/** Actions whose details.ids mark a candidate as "already seen today" by that person (counted by actor / budget
+ *  owner, so a staff member's and an employer's views never mix). */
+export const SEEN_ACTIONS: readonly string[] = ['candidates.shown', 'candidate.applications_viewed', 'candidate.cv_opened',
+  'employer.applicants_shown', 'employer.cv_opened'];
+
+/* ---------------------------------------------------------------------------
+ *  Employers see the applicants the SKEELZ team forwarded to them (owner's decision 11.2026, docs/employers.md):
+ *  name + CV only, for a job they own, while the job is active and up to EMPLOYER_ACCESS_DAYS after it stopped
+ *  being active (closed, suspended or removed from the board). Nothing is deleted when the window ends.
+ * ------------------------------------------------------------------------- */
+export const EMPLOYER_ACCESS_DAYS = 90;
+
+/** Active = on the board: status Active and not removed (deleted_at). Private/scheduled jobs still count as active. */
+export const jobIsActive = (j: { status: string; deletedAt?: Date | string | null }): boolean =>
+  j.status === 'Active' && !j.deletedAt;
+
+/** Until when an employer may see forwarded applicants of a job: null = no end (the job is active). `inactiveSince`
+ *  is the moment the job stopped being active (job_inactive_since). A job that is not active and has no such moment
+ *  is treated as closed long ago (no access). */
+export const employerAccessUntil = (j: { status: string; deletedAt?: Date | string | null }, inactiveSince: Date | string | null | undefined): Date | null | 'closed' => {
+  if (jobIsActive(j)) return null;
+  if (!inactiveSince) return 'closed';
+  return new Date(new Date(inactiveSince).getTime() + EMPLOYER_ACCESS_DAYS * 86400_000);
+};
+export const employerWindowOpen = (j: { status: string; deletedAt?: Date | string | null }, inactiveSince: Date | string | null | undefined, now: Date = new Date()): boolean => {
+  const until = employerAccessUntil(j, inactiveSince);
+  return until === null || (until !== 'closed' && until.getTime() > now.getTime());
+};
+
+/** Whether staff may cancel a forward: only while it is live and the employer has not been shown it yet. */
+export const forwardCancelRefusal = (f: { cancelledAt: Date | string | null; firstSeenAt: Date | string | null } | null):
+  null | 'forward_not_found' | 'forward_cancelled' | 'forward_seen' => {
+  if (!f) return 'forward_not_found';
+  if (f.cancelledAt) return 'forward_cancelled';
+  if (f.firstSeenAt) return 'forward_seen';
+  return null;
+};
 
 /** Activity log retention, quoted by the privacy texts. */
 export const AUDIT_RETENTION_MONTHS = 24;
@@ -31,13 +78,13 @@ export const AUDIT_RETENTION_MONTHS = 24;
 export const SUBMISSION_RETENTION_MONTHS = 12;
 export const SUBMISSION_LIMITS = { perIpPerHour: 5, maxPending: 300 } as const;
 
-/** Access reviews of staff (admins and content managers). */
+/** Access reviews of staff (admins, content managers, placement coordinators). */
 export const REVIEW = { validDays: 60, remindDays: 10 } as const;
 
 /** Roles an access review covers (everyone but candidates). */
-export const REVIEWED_ROLES: readonly string[] = ['admin', 'content_manager'];
+export const REVIEWED_ROLES: readonly string[] = ['admin', 'content_manager', 'placement_coordinator'];
 /** Roles an admin may assign. */
-export const ASSIGNABLE_ROLES: readonly string[] = ['user', 'content_manager', 'admin'];
+export const ASSIGNABLE_ROLES: readonly string[] = ['user', 'placement_coordinator', 'content_manager', 'admin'];
 
 export type StaffChange =
   | { kind: 'role'; to: string }
@@ -147,9 +194,12 @@ const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 // Israeli phone numbers and long digit runs (ids) that look like a person's number.
 const PHONE_RE = /(?<![\w-])(?:\+?972[-\s]?|0)(?:[23489]|5\d|7\d)[-\s]?\d{3}[-\s]?\d{4}(?!\d)/g;
 
-/** Masks emails and phone numbers inside free text (error messages, third-party replies). */
+// An Israeli ID number (תעודת זהות): a standalone run of 8–9 digits (never inside an id such as a hex ObjectId).
+const ID_NUMBER_RE = /(?<![\w-])\d{8,9}(?![\w-])/g;
+
+/** Masks emails, phone numbers and ID numbers inside free text (error messages, third-party replies). */
 export const redactText = (s: string): string =>
-  s.replace(EMAIL_RE, '[email]').replace(PHONE_RE, '[phone]');
+  s.replace(EMAIL_RE, '[email]').replace(PHONE_RE, '[phone]').replace(ID_NUMBER_RE, '[id]');
 
 /** A Postgres driver error (carries the SQL values in `detail`/`where`). */
 export const isDbError = (e: any): boolean =>
@@ -168,18 +218,31 @@ export const safeErrorText = (e: any): string => {
 
 /* ---------------------------------------------------------------------------
  *  Who may sign in how. ONE place: staff (the reviewed roles: admin, content
- *  manager) sign in only with xhostd SSO ("Continue with Google"); candidates
+ *  manager, placement coordinator) sign in only with xhostd SSO ("Continue with Google"); candidates
  *  with a password or the same SSO. A new staff role joins REVIEWED_ROLES.
  * ------------------------------------------------------------------------- */
 export const STAFF_ROLES: readonly string[] = REVIEWED_ROLES;
 export const isStaffRole = (role: string | null | undefined): boolean => !!role && STAFF_ROLES.includes(role);
 
-export type SignInMethod = 'password' | 'xhostd';
+/** 'password': sessions made before 11.2026 only (password sign-in was removed); 'email_code': a code sent by email. */
+export type SignInMethod = 'password' | 'xhostd' | 'microsoft' | 'email_code';
 /** Is a session made with this method valid for this role? Checked on every request (jwtAuthMiddleware), with the
  *  role from the DB: staff only on an xhostd SSO session. Candidates on any (sessions from before `via` existed
- *  carry none; the xhostd flow never signs a candidate in). */
+ *  carry none). "Continue with Microsoft" ('microsoft') is for candidates only, so it never counts for staff. */
 export const methodAllowedForRole = (method: string | null | undefined, role: string | null | undefined): boolean =>
   isStaffRole(role) ? method === 'xhostd' : true;
+
+/**
+ * Several roles per account (owner, 23.11.2026): the roles a session of this method actually carries. Each role
+ * keeps its own rule: a staff role counts only on an xhostd SSO ("Continue with Google") session; candidate and
+ * employer roles on any. So a candidate who is also a content manager and signs in by an emailed code (or with
+ * Microsoft) is a candidate on that session, never staff. An empty result = no session (a staff-only account
+ * signed in any other way).
+ */
+export const effectiveRoles = (roles: readonly string[], method: string | null | undefined): string[] =>
+  roles.filter((r) => methodAllowedForRole(method, r));
+/** Has the account any role that signs in without Google (candidate / employer)? Email code and Microsoft need one. */
+export const hasNonStaffRole = (roles: readonly string[]): boolean => roles.some((r) => !isStaffRole(r));
 
 /** A return path after an external sign-in: same-site absolute path only (no //host, no scheme, no backslash). */
 export const safeReturnPath = (p: unknown, fallback = '/'): string => {
@@ -209,11 +272,62 @@ export const requestHost = (hostHeader: string | undefined): string => {
  *  Only these fields can ever be set this way: never email, role, password or
  *  another person's record.
  * ------------------------------------------------------------------------- */
-export const PROFILE_FIELDS = ['firstName', 'lastName', 'phoneNumber', 'citySymbol', 'gender', 'dateOfBirth', 'skills', 'cvFileUrl'] as const;
+export const PROFILE_FIELDS = ['firstName', 'lastName', 'phoneNumber', 'citySymbol', 'gender', 'dateOfBirth', 'idNumber', 'skills', 'cvFileUrl'] as const;
 export type ProfileField = typeof PROFILE_FIELDS[number];
-/** Required to have a complete candidate profile (a new SSO candidate must give them all). */
-export const PROFILE_REQUIRED: readonly ProfileField[] = ['firstName', 'lastName', 'phoneNumber', 'citySymbol', 'gender', 'dateOfBirth'];
 export const GENDERS: readonly string[] = ['male', 'female', 'other'];
+
+/* ---------------------------------------------------------------------------
+ *  Sign-up fields setting (admins, /security-management): for each field below
+ *  whether the candidate MUST fill it, MAY fill it, or (ID number only) does
+ *  not see it at all. First and last name are always required; email comes
+ *  from the sign-in. The server enforces it (checkProfile), so the form can't
+ *  skip a required field. Stored in app_settings 'signupFields'.
+ * ------------------------------------------------------------------------- */
+export const SIGNUP_FIELDS = ['phoneNumber', 'citySymbol', 'gender', 'dateOfBirth', 'idNumber'] as const;
+export type SignupField = typeof SIGNUP_FIELDS[number];
+export type SignupFieldMode = 'required' | 'optional' | 'hidden';
+export type SignupFieldsSetting = Record<SignupField, SignupFieldMode>;
+/** Today's form when nothing is stored: everything required as before; the ID number optional (owner, 11.2026). */
+export const DEFAULT_SIGNUP_FIELDS: Readonly<SignupFieldsSetting> = Object.freeze({
+  phoneNumber: 'required', citySymbol: 'required', gender: 'required', dateOfBirth: 'required', idNumber: 'optional',
+});
+/** 'hidden' only for the ID number: the other fields are part of every candidate's record. */
+export const signupFieldModes = (f: SignupField): readonly SignupFieldMode[] =>
+  f === 'idNumber' ? ['required', 'optional', 'hidden'] : ['required', 'optional'];
+export const isSignupFieldMode = (f: string, v: unknown): boolean =>
+  (SIGNUP_FIELDS as readonly string[]).includes(f) && (signupFieldModes(f as SignupField) as readonly unknown[]).includes(v);
+/** A stored (or patched) value → a full, valid setting; unknown keys and bad values fall back to `base`. */
+export const normalizeSignupFields = (raw: unknown, base: Readonly<SignupFieldsSetting> = DEFAULT_SIGNUP_FIELDS): SignupFieldsSetting => {
+  const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const out = { ...base } as SignupFieldsSetting;
+  for (const f of SIGNUP_FIELDS) if (isSignupFieldMode(f, src[f])) out[f] = src[f] as SignupFieldMode;
+  return out;
+};
+/** The fields a candidate must give under this setting (names always). */
+export const requiredProfileFields = (s: Readonly<SignupFieldsSetting> = DEFAULT_SIGNUP_FIELDS): ProfileField[] =>
+  ['firstName', 'lastName', ...SIGNUP_FIELDS.filter((f) => s[f] === 'required')];
+/** Required under the default setting (for callers without a setting). */
+export const PROFILE_REQUIRED: readonly ProfileField[] = requiredProfileFields(DEFAULT_SIGNUP_FIELDS);
+
+/**
+ * Israeli ID number (תעודת זהות): 5–9 digits (shorter ones padded with zeros on the left), not all zeros, and the
+ * check digit right (weights 1,2,1,2…, digits of each product summed, total divisible by 10). Returns the 9-digit
+ * form, or null.
+ */
+export const normalizeIsraeliId = (v: unknown): string | null => {
+  if (typeof v !== 'string' && typeof v !== 'number') return null;
+  const s = String(v).trim();
+  if (!/^\d{5,9}$/.test(s)) return null;
+  const id = s.padStart(9, '0');
+  if (/^0+$/.test(id)) return null;
+  let sum = 0;
+  for (let i = 0; i < 9; i++) {
+    let n = Number(id[i]) * ((i % 2) + 1);
+    if (n > 9) n -= 9;
+    sum += n;
+  }
+  return sum % 10 === 0 ? id : null;
+};
 
 const nameOk = (v: unknown) => typeof v === 'string' && v.trim().length >= 2 && v.trim().length <= 30 && !/[0-9]/.test(v);
 /** Israeli mobile (05x + 7 digits) or landline (02/03/04/08/09 + 7 digits), digits only. */
@@ -234,18 +348,26 @@ const dateOk = (v: unknown, now: Date) => {
 export type ProfileCheck = { ok: true; values: Partial<Record<ProfileField, any>> } | { ok: false; bad: string[] };
 
 /**
- * Checks a candidate's own details. Unknown fields are dropped (allowlist). With `requireAll` every field in
- * PROFILE_REQUIRED must be present; otherwise only the given ones are checked. Returns field NAMES on failure.
+ * Checks a candidate's own details. Unknown fields are dropped (allowlist). With `requireAll` every field the
+ * setting requires (`fields`, default DEFAULT_SIGNUP_FIELDS) must be present; otherwise only the given ones are
+ * checked. A field the setting hides is dropped. An empty ID number, when the setting doesn't require one and
+ * `allowClear` is set (the personal area), clears it (values.idNumber = null). Returns field NAMES on failure.
  */
-export const checkProfile = (body: unknown, opts: { requireAll?: boolean; now?: Date } = {}): ProfileCheck => {
+export const checkProfile = (
+  body: unknown, opts: { requireAll?: boolean; now?: Date; fields?: Readonly<SignupFieldsSetting>; allowClear?: boolean } = {},
+): ProfileCheck => {
   const src = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
   const now = opts.now ?? new Date();
+  const setting = opts.fields ?? DEFAULT_SIGNUP_FIELDS;
+  const required = requiredProfileFields(setting);
   const values: Partial<Record<ProfileField, any>> = {};
   const bad: string[] = [];
   for (const f of PROFILE_FIELDS) {
+    if (f === 'idNumber' && setting.idNumber === 'hidden') continue;
     const v = src[f];
     if (v === undefined || v === null || v === '') {
-      if (opts.requireAll && PROFILE_REQUIRED.includes(f)) bad.push(f);
+      if (opts.requireAll && required.includes(f)) bad.push(f);
+      else if (f === 'idNumber' && v === '' && opts.allowClear && setting.idNumber !== 'required') values.idNumber = null;
       continue;
     }
     switch (f) {
@@ -261,6 +383,11 @@ export const checkProfile = (body: unknown, opts: { requireAll?: boolean; now?: 
         if (typeof v === 'string' && GENDERS.includes(v)) values[f] = v; else bad.push(f); break;
       case 'dateOfBirth':
         if (dateOk(v, now)) values[f] = typeof v === 'string' ? v : (v as Date).toISOString(); else bad.push(f); break;
+      case 'idNumber': {
+        const id = normalizeIsraeliId(v);
+        if (id) values[f] = id; else bad.push(f);
+        break;
+      }
       case 'skills':
         if (Array.isArray(v) && v.length <= 100 && v.every((s) => typeof s === 'string' && /^[a-f0-9]{24}$/i.test(s))) values[f] = v;
         else bad.push(f);
@@ -272,6 +399,71 @@ export const checkProfile = (body: unknown, opts: { requireAll?: boolean; now?: 
   return bad.length ? { ok: false, bad } : { ok: true, values };
 };
 
-/** A candidate whose required details are missing (e.g. an account an earlier SSO sign-in created bare). */
-export const profileIncomplete = (u: { role?: string | null; phoneNumber?: unknown; citySymbol?: unknown } | null | undefined): boolean =>
-  !!u && u.role === 'user' && (!u.phoneNumber || !(Number(u.citySymbol) > 0));
+/** A candidate whose required details are missing (e.g. an account an earlier SSO sign-in created bare): phone and
+ *  town, each only while the setting requires it (the other fields were never checked here). */
+export const profileIncomplete = (
+  u: { role?: string | null; roles?: readonly string[] | null; phoneNumber?: unknown; citySymbol?: unknown } | null | undefined,
+  fields: Readonly<SignupFieldsSetting> = DEFAULT_SIGNUP_FIELDS,
+): boolean =>
+  // Anyone holding the candidate role (several roles per account since 23.11.2026).
+  !!u && (u.roles?.length ? u.roles.includes('user') : u.role === 'user') &&
+  ((fields.phoneNumber === 'required' && !u.phoneNumber) || (fields.citySymbol === 'required' && !(Number(u.citySymbol) > 0)));
+
+/* ---------------------------------------------------------------------------
+ *  Sign-ins in the activity log (docs/security.md "Sign-ins"): every sign-in and sign-up entry carries the address
+ *  (IP) and a short device summary (browser and OS family only, never the full user agent). Unusual sign-ins raise
+ *  an alert on the admin security screen (security/signins.ts). The privacy texts quote these numbers.
+ * ------------------------------------------------------------------------- */
+export const SIGNIN_ALERTS = {
+  /** Failed or refused sign-in attempts on ONE staff account within the window. */
+  staffFailures: { count: 5, windowMinutes: 15 },
+  /** Different accounts that signed in from ONE address within the window. */
+  accountsPerAddress: { count: 10, windowMinutes: 60 },
+} as const;
+
+/** Failed / refused sign-in entries that count towards a staff account's burst (details.account or target = user:<id>). */
+export const SIGNIN_FAILURE_ACTIONS: readonly string[] = ['auth.oauth_failed', 'auth.email_code_refused_staff', 'auth.email_code_limited',
+  'auth.email_code_refused_deactivated', 'auth.login_refused_deactivated'];
+
+/** The address as the log keeps it: IPv4-mapped IPv6 as plain IPv4, at most 64 characters, '' when unknown. */
+export const normalizeIp = (ip: unknown): string => {
+  const s = typeof ip === 'string' ? ip.trim() : '';
+  if (!s) return '';
+  const v4 = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(s);
+  return (v4 ? v4[1] : s).slice(0, 64);
+};
+
+/** Browser and OS family of a user agent ("Chrome · Windows"); never versions or the full string. */
+export const deviceSummary = (ua: unknown): string => {
+  const s = typeof ua === 'string' ? ua.slice(0, 1000) : '';
+  if (!s.trim()) return 'unknown';
+  if (/bot|crawl|spider|curl|wget|python|okhttp|postman|axios|^node$|undici|headless/i.test(s)) return 'script';
+  const browser =
+    /Edg(e|A|iOS)?\//.test(s) ? 'Edge'
+      : /OPR\/|Opera/.test(s) ? 'Opera'
+        : /SamsungBrowser\//.test(s) ? 'Samsung Internet'
+          : /Firefox\/|FxiOS\//.test(s) ? 'Firefox'
+            : /Chrome\/|CriOS\/|Chromium\//.test(s) ? 'Chrome'
+              : /Safari\//.test(s) && /Version\//.test(s) ? 'Safari'
+                : 'other';
+  const os =
+    /Windows/.test(s) ? 'Windows'
+      : /Android/.test(s) ? 'Android'
+        : /iPhone|iPad|iPod/.test(s) ? 'iOS'
+          : /CrOS/.test(s) ? 'ChromeOS'
+            : /Mac OS X|Macintosh/.test(s) ? 'macOS'
+              : /Linux/.test(s) ? 'Linux'
+                : 'other';
+  return `${browser} · ${os}`;
+};
+
+/** A staff sign-in from an address this account has not signed in from before. Only once the account HAS a history
+ *  of addresses (entries from before addresses were logged carry none, so the first one after the change is not news). */
+export const isNewSigninAddress = (ip: string, knownIps: Iterable<string>): boolean => {
+  if (!ip) return false;
+  const known = new Set([...knownIps].filter(Boolean));
+  return known.size > 0 && !known.has(ip);
+};
+
+/** A burst: at least `limit` events (this one included) in the window. */
+export const reachedBurst = (count: number, limit: number): boolean => limit > 0 && count >= limit;

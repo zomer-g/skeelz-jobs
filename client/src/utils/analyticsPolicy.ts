@@ -8,7 +8,9 @@
 // docs/analytics.md lists the same events — keep both in step.
 
 export type ApplyType = 'guest' | 'registered' | 'self_apply';
-export type CvChoice = 'keep' | 'replace' | 'job_only' | 'none';
+/** profile = the CV already on the profile; updated = a new file that replaces it; job_only = a file for this job only. */
+export type CvChoice = 'profile' | 'updated' | 'job_only' | 'none';
+export type ApplyMode = 'quick' | 'regular' | 'self';
 export type FunnelSource = 'list' | 'map' | 'direct' | 'apply' | 'header';
 
 type Check = (v: unknown) => boolean;
@@ -27,7 +29,38 @@ const url: Check = (v) => typeof v === 'string' && v.length <= 400 && /^https?:\
 const utm = token(100);
 // Error codes: enum keys (UPPER_SNAKE) or the employer form's field codes. Never message text.
 const LOWER_CODES = ['required', 'too_short', 'too_long', 'invalid', 'network', 'rate_limited', 'queue_full', 'server_error', 'unknown'];
-const errorCode: Check = (v) => typeof v === 'string' && v.length <= 60 && !/\d{7,}/.test(v) && (/^[A-Z][A-Z0-9_]*$/.test(v) || LOWER_CODES.includes(v));
+/** Why an application did not go through (apiErrorCode() in analytics.ts maps the server's codes to these). */
+export const APPLY_ERROR_CODES = ['threshold_not_confirmed', 'cv_required', 'already_applied', 'candidate_read_only', 'job_on_existing_site',
+  'consent_needed', 'terms_not_accepted', 'employer_account', 'limit_reached', 'apply_failed'] as const;
+// Internal API codes such as jb4 / au9 (two letters + digits) are codes, not text.
+const errorCode: Check = (v) => typeof v === 'string' && v.length <= 60 && !/\d{7,}/.test(v) &&
+  (/^[A-Z][A-Z0-9_]*$/.test(v) || LOWER_CODES.includes(v) || (APPLY_ERROR_CODES as readonly string[]).includes(v) || /^[a-z]{2}\d{1,3}$/.test(v));
+
+/**
+ * The apply funnel, in order. Every apply_* step event carries `step` (this number) and `step_name`, so a GA4
+ * funnel exploration can use either the event names or step_name. Steps a job does not have (no threshold
+ * condition, no terms question) are simply skipped. apply_abandon carries the furthest step reached.
+ */
+export const APPLY_STEPS = ['start', 'cv_step', 'cv_upload', 'cv_choice', 'threshold', 'threshold_confirmed',
+  'terms', 'submit', 'success'] as const;
+export type ApplyStepName = (typeof APPLY_STEPS)[number];
+export const applyStepNumber = (name: ApplyStepName) => APPLY_STEPS.indexOf(name) + 1;
+export const ABANDON_REASONS = ['dialog_closed', 'page_left', 'other_job'] as const;
+
+/** A server error code → the analytics code for apply_error (null: not one we can name; use the message's key). */
+export function applyErrorFromApiCode(code: string | null | undefined): string | null {
+  if (!code) return null;
+  const known: Record<string, string> = {
+    jb11: 'cv_required', jb3: 'already_applied', jb4: 'apply_failed',
+    threshold_not_confirmed: 'threshold_not_confirmed', candidate_read_only: 'candidate_read_only', job_on_existing_site: 'job_on_existing_site',
+    consent_needed: 'consent_needed', terms_required: 'terms_not_accepted', marketing_required: 'terms_not_accepted',
+    network: 'network',
+  };
+  if (Object.prototype.hasOwnProperty.call(known, code)) return known[code];
+  if (code.startsWith('limit_')) return 'limit_reached';
+  if (/^[a-z]{2}\d{1,3}$/.test(code)) return code;
+  return null;
+}
 
 /** Form field NAMES that may be reported (never their values). */
 export const APPLY_FIELDS = ['fullName', 'email', 'phoneNumber', 'cvFilePath'] as const;
@@ -57,7 +90,10 @@ export const PARAM_CHECKS: Readonly<Record<string, Check>> = {
   // funnel
   job_id: jobId,
   apply_type: oneOf('guest', 'registered', 'self_apply'),
-  cv_choice: oneOf('keep', 'replace', 'job_only', 'none'),
+  cv_choice: oneOf('profile', 'updated', 'job_only', 'none'),
+  apply_mode: oneOf('quick', 'regular', 'self'),
+  has_threshold: bool,
+  abandon_reason: oneOf(...ABANDON_REASONS),
   cv_required: bool,
   source: oneOf('list', 'map', 'direct', 'apply', 'header'),
   view: oneOf('list', 'map'),
@@ -72,12 +108,17 @@ export const PARAM_CHECKS: Readonly<Record<string, Check>> = {
   error_code: errorCode,
   field_name: oneOf(...APPLY_FIELDS, ...POST_JOB_FIELDS),
   step: int(0, 50),
-  step_name: oneOf(...POST_JOB_STEPS),
+  step_name: oneOf(...POST_JOB_STEPS, ...APPLY_STEPS),
   file_type: oneOf('pdf', 'docx', 'other'),
   file_size_kb: int(0, 100000),
-  method: oneOf('email'),
+  method: oneOf('email_code', 'google', 'microsoft'),
   consent_analytics: bool,
+  install_source: oneOf('footer', 'menu'),
+  install_outcome: oneOf('accepted', 'dismissed', 'ios_help'),
 };
+
+/** Keys every apply-funnel event carries (set by applyFlow* in analytics.ts). */
+const FLOW = ['job_id', 'apply_type', 'apply_mode', 'cv_required', 'has_threshold', 'cv_choice', 'step', 'step_name'] as const;
 
 /** Event name → the keys it may carry (on top of the context keys). */
 export const EVENTS = {
@@ -90,13 +131,23 @@ export const EVENTS = {
   job_view: ['job_id', 'source', 'apply_type'],
   apply_click: ['job_id', 'apply_type', 'source'],
   apply_form_shown: ['job_id', 'apply_type', 'cv_required'],
-  apply_cv_choice: ['job_id', 'apply_type', 'cv_choice'],
-  cv_upload: ['job_id', 'apply_type', 'file_type', 'file_size_kb'],
-  cv_upload_error: ['job_id', 'apply_type', 'error_code'],
   apply_validation_error: ['job_id', 'apply_type', 'field_name', 'error_code'],
-  apply_submit: ['job_id', 'apply_type', 'cv_choice'],
-  apply_success: ['job_id', 'apply_type', 'cv_choice'],
-  apply_error: ['job_id', 'apply_type', 'error_code'],
+  // the apply funnel (APPLY_STEPS; every one also carries FLOW keys: job, type, mode, CV rule, threshold, step)
+  apply_start: [...FLOW],
+  apply_cv_step: [...FLOW],
+  apply_cv_upload_start: [...FLOW],
+  apply_cv_upload: [...FLOW, 'file_type', 'file_size_kb'],
+  apply_cv_upload_error: [...FLOW, 'error_code'],
+  apply_cv_choice: [...FLOW],
+  apply_threshold_shown: [...FLOW],
+  apply_threshold_confirmed: [...FLOW],
+  apply_threshold_dismissed: [...FLOW],
+  apply_terms_shown: [...FLOW],
+  apply_terms_declined: [...FLOW],
+  apply_submit: [...FLOW],
+  apply_success: [...FLOW],
+  apply_error: [...FLOW, 'error_code'],
+  apply_abandon: [...FLOW, 'abandon_reason'],
   login_prompt: ['job_id', 'source'],
   login: ['method', 'source', 'job_id'],
   sign_up_start: ['source', 'job_id'],
@@ -109,8 +160,13 @@ export const EVENTS = {
   post_job_submit: [],
   post_job_success: [],
   post_job_error: ['error_code'],
+  // staff (jobs-management screen): a job was published. Only its id.
+  job_publish: ['job_id'],
   // consent
   consent_update: ['consent_analytics'],
+  // the installable app (docs/pwa.md): the install option was used / the site was installed
+  pwa_install_prompt: ['install_source', 'install_outcome'],
+  pwa_installed: [],
 } as const satisfies Record<string, readonly string[]>;
 
 export type EventName = keyof typeof EVENTS;

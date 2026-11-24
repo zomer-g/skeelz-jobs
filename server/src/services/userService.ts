@@ -1,19 +1,19 @@
-import { UserRole } from '../models/enums.js';
+import { UserRole, isCandidate } from '../models/enums.js';
 import { CreateUserDto } from '../dto/createUserDto.js';
 import * as userDAL from '../dal/userDAL.js';
-import { comparePassword, hashPassword } from './hashService.js';
 import { UpdateUserDto } from '../dto/updateUserDto.js';
 import IUser from '../models/schemas/user.js';
 import { AxiosError, isAxiosError } from 'axios';
 import { UserErrorCodes, UserErrorMessages } from '../i18n/i18n.js';
-import * as emailService from './emailService.js';
-import { generateWelcomeEmail } from '../utils/emailTemplates.js';
+import { mailWelcome } from '../mail/triggers.js';
 import { usersFilter } from '../models/interfaces/general.interface.js';
-import * as salesforceService from './salesforceService.js';
+import { queueSalesforce } from './salesforceSync.js';
 import * as smooveService from './smooveService.js'
 import { convertToIsraelTimeAndStoreAsUTC} from '../utils/utils.js';
-import { claimCvUpload } from './s3Service.js';
+import { CvAttachAudit, claimCvUpload } from './s3Service.js';
 import * as locationService from '../services/locationService.js';
+import { mayAddToMailingList } from '../security/consent.js';
+import { linkRemovalToNewCandidate } from '../dal/marketingDAL.js';
 
 
 
@@ -46,49 +46,54 @@ const checkUserConflictsForCreation = async (email: string ,phoneNumber: string 
   }
   const existingUser = await userDAL.findUserByEmail(email);
   handleEmailConflicts(existingUser, email);
-  if(!existingUser){
+  if(!existingUser && phoneNumber){
     handlePhoneNumberConflicts(await userDAL.findUserByPhoneNumber(phoneNumber), phoneNumber);
   }
 };
 
 /**
- * `sso`: sign-up after "Continue with Google" (xhostd SSO). The email comes from the verified SSO identity (the
- * caller puts it in the dto, never from the request body), there is no password, and the account is linked to
- * the SSO subject. Otherwise the ordinary password sign-up.
+ * A new candidate. Candidates have no password (since 11.2026): they sign in with Google (xhostd SSO), Microsoft, or
+ * with a code sent by email. The email always comes from a verified source the caller holds (the SSO identity, or the
+ * address a code was sent to), never from the request body.
+ * `sso`: after "Continue with Google / Microsoft": the account is linked to the SSO subject (`provider` 'microsoft' →
+ * users.ms_sub, else users.xhostd_sub).
  */
-export const createUser = async (createUserDto: CreateUserDto, opts: { sso?: { sub: string } } = {}): Promise<{
+export const createUser = async (createUserDto: CreateUserDto, opts: { sso?: { sub: string; provider?: 'xhostd' | 'microsoft' }; consent: { marketing: boolean } }): Promise<{
   _id: any; user: IUser
 }> => {
   createUserDto.email = String(createUserDto.email || '').toLowerCase().trim();
   const isText = (v: unknown, max = 100) => typeof v === 'string' && v.trim().length > 0 && v.length <= max;
-  const passwordOk = opts.sso
-    ? true
-    : typeof createUserDto.password === 'string' && createUserDto.password.length >= 6 && createUserDto.password.length <= 200;
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(createUserDto.email) || !isText(createUserDto.firstName) || !isText(createUserDto.lastName)
-      || !isText(createUserDto.phoneNumber, 30) || !passwordOk || !Number.isFinite(Number(createUserDto.citySymbol))) {
+      // Phone and town may be optional (the sign-up fields setting, checked by the controller with checkProfile).
+      || (createUserDto.phoneNumber && !isText(createUserDto.phoneNumber, 30)) || !Number.isFinite(Number(createUserDto.citySymbol ?? 0))) {
     throw new AxiosError(UserErrorMessages.CREATE_USER_FAILED, UserErrorCodes.CREATE_USER_FAILED);
   }
-  createUserDto.citySymbol = Number(createUserDto.citySymbol);
+  createUserDto.citySymbol = Number(createUserDto.citySymbol ?? 0);
   const { email,phoneNumber,citySymbol } = createUserDto;
   await checkUserConflictsForCreation(email,phoneNumber,citySymbol);
-  createUserDto.password = opts.sso ? '' : await hashPassword(createUserDto.password);
   const requestedCv = createUserDto.cvFileUrl;
   createUserDto.cvFileUrl = '';
-  createUserDto.dateOfBirth = convertToIsraelTimeAndStoreAsUTC(createUserDto.dateOfBirth);
-  let createdUser: IUser = await userDAL.createUser(createUserDto, { ssoSub: opts.sso?.sub });
+  if (createUserDto.dateOfBirth) createUserDto.dateOfBirth = convertToIsraelTimeAndStoreAsUTC(createUserDto.dateOfBirth);
+  let createdUser: IUser = await userDAL.createUser(createUserDto, {
+    ssoSub: opts.sso && opts.sso.provider !== 'microsoft' ? opts.sso.sub : undefined,
+    msSub: opts.sso?.provider === 'microsoft' ? opts.sso.sub : undefined,
+    consent: opts.consent,
+  });
+  // An earlier removal of this address: cleared by their own "yes" here, else shown on the new account.
+  await linkRemovalToNewCandidate(String(createdUser.id), createdUser.email, opts.consent.marketing === true);
   // The CV must be an upload that nobody owns yet; it becomes this user's.
-  const cvKey = await claimCvUpload(requestedCv, createdUser.id);
+  const cvKey = await claimCvUpload(requestedCv, createdUser.id, { via: 'signup' });
   if (cvKey) {
     createdUser = (await userDAL.updateUserById(createdUser.id, { cvFileUrl: cvKey })) ?? createdUser;
   }
-  const { subject, text } = generateWelcomeEmail(createdUser);
-  await emailService.sendEmail(createdUser.email, subject, text, true);
-  await salesforceService.createContact(createdUser);
-  if (createdUser.cvFileUrl) {
-    await salesforceService.uploadCVFromS3ToSalesforce(createdUser.cvFileUrl, createdUser.id.toString());
+  await mailWelcome(createdUser);
+  // Salesforce (when on): queued, sent in the background with retries (services/salesforceSync.ts).
+  await queueSalesforce('candidate', String(createdUser.id));
+  // The mailing list gets only people who ticked the marketing box (and only when SMOOV is on).
+  if (mayAddToMailingList(opts.consent.marketing)) {
+    const location = createdUser.citySymbol > 0 ? await locationService.getLocationByCitySymbol(createdUser.citySymbol) : null;
+    await smooveService.createSmooveContact(createdUser, location?.city ?? '');
   }
-  let location= await locationService.getLocationByCitySymbol(createdUser.citySymbol);
-  await smooveService.createSmooveContact(createdUser,location.city);
   return {
     _id: createdUser.id,
     user: createdUser,
@@ -97,25 +102,14 @@ export const createUser = async (createUserDto: CreateUserDto, opts: { sso?: { s
 
 
 
-export const updateUserPassword = async (userID: string, hashedPassword: string): Promise<void> => {
-  try{
-    await userDAL.updateUserPassword(userID, hashedPassword);
-  } catch(error){
-    if(isAxiosError(error)){
-      throw (error)
-    }
-    throw new AxiosError(UserErrorMessages.UPDATE_USER_PASSWORD_FAILED, UserErrorCodes.UPDATE_USER_PASSWORD_FAILED);
-  }
-}
-
-export const updateUserById = async (userId: string, updateUserDto: UpdateUserDto, opts: { candidatesOnly?: boolean } = {}) => {
+export const updateUserById = async (userId: string, updateUserDto: UpdateUserDto, opts: { candidatesOnly?: boolean; cvAudit?: CvAttachAudit } = {}) => {
   try{
     if (opts.candidatesOnly) {
       const target = await userDAL.findUserById(userId);
-      if (!target || target.role !== UserRole.USER) return null;
+      if (!target || !isCandidate(target)) return null;
     }
     if (updateUserDto.cvFileUrl) {
-      const cvKey = await claimCvUpload(updateUserDto.cvFileUrl, userId);
+      const cvKey = await claimCvUpload(updateUserDto.cvFileUrl, userId, opts.cvAudit ?? { via: 'profile' });
       if (cvKey) {
         updateUserDto.cvFileUrl = cvKey;
       } else {
@@ -123,12 +117,8 @@ export const updateUserById = async (userId: string, updateUserDto: UpdateUserDt
       }
     }
     const updatedUser = await userDAL.updateUserById(userId, updateUserDto, opts);
-    if (updatedUser) {
-      await salesforceService.updateContact(updatedUser ,userId);
-      if (updateUserDto.cvFileUrl) {
-        await salesforceService.uploadCVFromS3ToSalesforce(updateUserDto.cvFileUrl, updatedUser.id.toString());   
-      }
-    }
+    // Candidates only (the queue checks the role); staff and employers are never sent as candidates.
+    if (updatedUser) await queueSalesforce('candidate', userId);
     return updatedUser;
   } catch(error){
     if(isAxiosError(error)){
@@ -141,19 +131,14 @@ export const updateUserById = async (userId: string, updateUserDto: UpdateUserDt
 /**
  * Makes an already-claimed upload (`key`, owned by this user) their profile CV.
  * The previous profile CV is kept: past applications may still point to it.
- * Salesforce sync failures are logged, not thrown (the DB change stands).
+ * Salesforce gets it through the queue (never fails this call).
  */
 export const setProfileCv = async (userId: string, key: string): Promise<void> => {
   const updatedUser = await userDAL.updateUserById(userId, { cvFileUrl: key });
   if (!updatedUser) {
     throw new AxiosError(UserErrorMessages.USER_NOT_FOUND, UserErrorCodes.USER_NOT_FOUND);
   }
-  try {
-    await salesforceService.updateContact(updatedUser, userId);
-    await salesforceService.uploadCVFromS3ToSalesforce(key, userId);
-  } catch (error) {
-    console.error('[salesforce] profile CV sync failed for a user', (error as Error)?.message);
-  }
+  await queueSalesforce('candidate', userId);
 };
 
 export const getUserByEmail =(email: string): Promise<IUser | null> => {
@@ -172,15 +157,6 @@ export const getUserById = (userID: string): Promise<IUser | null> => {
   }
 }
 
-// Compare passwords using the hash service
-export const compareUserPassword = async (userId: string, inputPassword: string): Promise<boolean> => {
-  const user = await userDAL.findUserById(userId);
-  if (!user){
-    throw new AxiosError(UserErrorMessages.USER_NOT_FOUND, UserErrorCodes.USER_NOT_FOUND);
-  } 
-
-  return comparePassword(inputPassword, user.password);
-}
 
 /** Does another account already use this phone number? (a candidate changing their own phone) */
 export const phoneTakenByOther = async (phoneNumber: string, userId: string): Promise<boolean> => {

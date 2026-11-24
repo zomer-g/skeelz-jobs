@@ -7,18 +7,21 @@ export enum Routes {
     DELETE_CV = 'files',
     MY_CV = 'users/me/cv',
     ME = 'users/me',
+    MY_MARKETING_CONSENT = 'users/me/marketing-consent',
+    MY_TERMS = 'users/me/terms',
     MY_CV_FILE = 'users/me/cv/file',
     //skills
     SKILLS = 'skills',
     //auth
-    LOGIN = 'login',
     LOGOUT = 'logout',
-    RESET_PASSWORD = 'password/reset',
-    PASSWORD_RESET_REQUEST = 'password/reset/initiate',
+    EMAIL_CODE_REQUEST = 'auth/email/request',
+    EMAIL_CODE_VERIFY = 'auth/email/verify',
+    EMAIL_SIGN_UP = 'auth/email/signup',
     AUTH_PROVIDERS = 'auth/providers',
     AUTH_SESSION = 'auth/session',
     SSO_SIGN_IN = 'auth/xhostd/start',
     SSO_SIGN_UP = 'auth/xhostd/signup',
+    MS_SIGN_IN = 'auth/microsoft/start',
     //jobs
     JOBS_ROUTES_PREFIX = 'jobs',
     GET_ACTIVE_JOBS = 'jobs/active',
@@ -31,6 +34,7 @@ export enum Routes {
     GUEST_APPLY_JOB = 'guestApply',
     //settings
     APPLY_POLICY_SETTINGS = 'admin/settings/apply-policy',
+    EMPLOYER_POSTING_SETTINGS = 'admin/settings/employer-posting',
     //locations
     GET_ALL_LOCATIONS = 'locations',
     GET_ALL_LOCATIONS_AND_DISTRICTS = 'locations-and-districts',

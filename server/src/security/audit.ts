@@ -12,6 +12,7 @@
  *  AUDIT_RETENTION_MONTHS; purgeAudit runs on its own timer (index.ts).
  *  Never put secrets or passwords in `details`.
  * ========================================================================== */
+import crypto from 'crypto';
 import { Request } from 'express';
 import { query } from '../config/db.js';
 import { AUDIT_RETENTION_MONTHS, REVIEWED_ROLES, safeErrorText } from './pure.js';
@@ -63,6 +64,27 @@ export const actorOf = (req: Request): string => {
   const u = req.authUser;
   if (u) return actorName(u);
   return `anonymous:${req.ip ?? 'unknown'}`;
+};
+
+/**
+ * How an email someone TYPED (sign-in, password reset) is written in the log: the account as user:<id> when it
+ * exists, else a short keyed hash (email#<12 hex>, HMAC with a server secret) — the same typed address gives the
+ * same value, so repeated attempts can still be seen, but the address itself is not stored.
+ */
+export const typedEmailRef = (email: string, userId?: string | null): string => {
+  if (userId) return `user:${userId}`;
+  const key = `${process.env.RESET_TOKEN_SECRET || process.env.ACCESS_TOKEN_SECRET || 'skeelz'}:audit-typed-email`;
+  return `email#${crypto.createHmac('sha256', key).update(email.trim().toLowerCase()).digest('hex').slice(0, 12)}`;
+};
+
+/**
+ * How an uploaded CV is written in the log: upload#<12 hex>, a keyed hash of its storage key. The key itself is never
+ * logged (it holds the upload token and the file's name, which can carry the candidate's name). The same file gives the
+ * same value in its cv.uploaded and cv.attached entries, so one can follow it from the upload to its owner.
+ */
+export const uploadRef = (key: string): string => {
+  const secret = `${process.env.RESET_TOKEN_SECRET || process.env.ACCESS_TOKEN_SECRET || 'skeelz'}:audit-upload`;
+  return `upload#${crypto.createHmac('sha256', secret).update(String(key)).digest('hex').slice(0, 12)}`;
 };
 
 /** Refusals are on record, throttled (once per actor + place + 10 minutes), so a probe can't flood the log. */

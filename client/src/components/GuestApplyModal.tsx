@@ -5,7 +5,8 @@ import * as Yup from 'yup';
 import { useFormik } from "formik";
 import { Guest, guestApplyValues } from "../models/interfaces/Props.interfaces";
 import SmallUploadFileArea from "./common/SmallUploadFileArea";
-import { track, trackOnce } from "../utils/analytics";
+import { applyFlow, startGuestApply, track, trackOnce } from "../utils/analytics";
+import ConsentChecks from "./consent/ConsentChecks";
 
 
 
@@ -18,13 +19,15 @@ interface UploadCvContentProps {
   onUpdateUser?: (index: number, userId: string, cvFilePath: string) => void;
   /** For analytics only. */
   jobId?: string;
+  /** For analytics only: the job has a threshold condition. */
+  hasThreshold?: boolean;
 }
 
 export interface FormHandle {
   submit: () => Promise<any>;
 }
 
-export const GuestApplyModal =  forwardRef<FormHandle, UploadCvContentProps>(({ handleGuestApply, cvRequired = false, jobId }, ref) => {
+export const GuestApplyModal =  forwardRef<FormHandle, UploadCvContentProps>(({ handleGuestApply, cvRequired = false, jobId, hasThreshold = false }, ref) => {
   const [cvFilePath, setCvFilePath] = useState('');
   const translations = i18n.getTranslations();
   const ga = { job_id: jobId, apply_type: 'guest' } as const;
@@ -43,7 +46,8 @@ export const GuestApplyModal =  forwardRef<FormHandle, UploadCvContentProps>(({ 
       fullName: '',
       phoneNumber: '',
       cvFilePath: '',
-
+      consent: false,
+      marketingConsent: false,
     },
     validationSchema: Yup.object({
       email: Yup.string()
@@ -78,6 +82,7 @@ export const GuestApplyModal =  forwardRef<FormHandle, UploadCvContentProps>(({ 
       cvFilePath: cvRequired
         ? Yup.string().required(translations.Inputs.CVRequired)
         : Yup.string(),
+      consent: Yup.boolean().oneOf([true], translations.Terms.TermsRequired),
     }),
     onSubmit: async (values) => {
       await handleGuestApply({ ...values, cvFilePath });
@@ -89,7 +94,7 @@ export const GuestApplyModal =  forwardRef<FormHandle, UploadCvContentProps>(({ 
       const errors = await formik.validateForm();
       // Field names only, never what was typed.
       for (const [field, message] of Object.entries(errors)) {
-        const required = message === translations.Inputs.Required || message === translations.Inputs.CVRequired;
+        const required = message === translations.Inputs.Required || message === translations.Inputs.CVRequired || field === 'consent';
         track('apply_validation_error', { ...ga, field_name: field, error_code: required ? 'required' : 'invalid' });
       }
       return formik.submitForm();
@@ -102,8 +107,10 @@ export const GuestApplyModal =  forwardRef<FormHandle, UploadCvContentProps>(({ 
 
 
   return (
-      <div className="me-0 me-md-4 bg-color-light-greyB border-radius-16 height-30rem py-2">
-        <form onSubmit={formik.handleSubmit} className="justify-content-between">
+      <div className="me-0 me-md-4 bg-color-light-greyB border-radius-16 py-2" style={{ minHeight: '30rem' }}>
+        {/* Analytics: the first focus in the form starts the guest's application (the apply funnel). */}
+        <form onSubmit={formik.handleSubmit} className="justify-content-between"
+          onFocusCapture={() => { if (jobId) startGuestApply(jobId, cvRequired, hasThreshold); }}>
           <div>
             <span className="font-RubikBold fs-1-25rem px-3 text-dark d-block">{translations.JobCard.ApplyForJob}</span>
             <div className="mt-2 mb-1 mb-md-4">
@@ -150,9 +157,10 @@ export const GuestApplyModal =  forwardRef<FormHandle, UploadCvContentProps>(({ 
               <div className='height-8rem pt-4 pt-md-1 max-width-24rem'>
                 <SmallUploadFileArea 
                 onFilePathChange={handleCvFilePath}
+                onUploadStart={() => { if (jobId) { startGuestApply(jobId, cvRequired, hasThreshold); applyFlow.step('apply_cv_upload_start', 'cv_upload', {}, jobId); } }}
                 onUploadResult={(r) => r.ok
-                  ? track('cv_upload', { ...ga, file_type: r.fileType, file_size_kb: r.sizeKb })
-                  : track('cv_upload_error', { ...ga, error_code: r.code })}
+                  ? applyFlow.step('apply_cv_upload', 'cv_upload', { file_type: r.fileType, file_size_kb: r.sizeKb }, jobId)
+                  : applyFlow.step('apply_cv_upload_error', 'cv_upload', { error_code: r.code }, jobId)}
                 className="w-100 pb-1"
                 label={cvRequired ? `${translations.Cv.UploadCv} *` : undefined}
                 aria-required={cvRequired || undefined}
@@ -163,6 +171,10 @@ export const GuestApplyModal =  forwardRef<FormHandle, UploadCvContentProps>(({ 
               </span>
             )}
               </div>
+              <ConsentChecks idPrefix={`guest-apply-${jobId ?? 'job'}`} audience="candidate" className="mt-3"
+                values={{ consent: formik.values.consent, marketingConsent: formik.values.marketingConsent }}
+                termsError={!!(formik.submitCount && formik.errors.consent)}
+                onChange={(v) => { formik.setFieldValue('consent', v.consent); formik.setFieldValue('marketingConsent', v.marketingConsent); }} />
             </div>
           </div>
         </form>

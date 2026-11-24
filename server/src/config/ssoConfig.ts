@@ -24,3 +24,34 @@ export const xhostdConfig = () => {
     cookieName: '__Host-xhost_id',
   };
 };
+
+/* ============================================================================
+ *  "Continue with Microsoft" (candidates only): our own OIDC client at the
+ *  Microsoft identity platform v2, `common` authority (personal Microsoft
+ *  accounts AND work/school accounts). OFF unless ENABLE_MICROSOFT_SSO=true and
+ *  both MS_CLIENT_ID (env) and MS_CLIENT_SECRET (secret) are set. Setup for the
+ *  owner: docs/microsoft-sso.md. Flow and email rule: security/microsoft.ts.
+ *
+ *  MS_LOGIN_BASE (a local mock, test/e2e-microsoft-sso.mjs) is honoured ONLY
+ *  with DEV_MODE=true; production always talks to login.microsoftonline.com.
+ *  MS_REDIRECT_URI pins the callback URL; without it the URL is built from the
+ *  host the request came in on (Microsoft refuses any URI not registered).
+ * ========================================================================== */
+export const MICROSOFT_LOGIN_BASE = 'https://login.microsoftonline.com';
+
+export const microsoftConfig = () => {
+  const base = (devOverride('MS_LOGIN_BASE') ?? MICROSOFT_LOGIN_BASE).replace(/\/$/, '');
+  const clientId = String(process.env.MS_CLIENT_ID ?? '').trim();
+  const clientSecret = String(process.env.MS_CLIENT_SECRET ?? '');
+  return {
+    enabled: process.env.ENABLE_MICROSOFT_SSO === 'true' && !!clientId && !!clientSecret,
+    clientId,
+    clientSecret,
+    loginBase: base,
+    authorizeUrl: `${base}/common/oauth2/v2.0/authorize`,
+    tokenUrl: `${base}/common/oauth2/v2.0/token`,
+    jwksUrl: `${base}/common/discovery/v2.0/keys`,
+    redirectUri: String(process.env.MS_REDIRECT_URI ?? '').trim(),
+    scope: 'openid email profile',
+  };
+};

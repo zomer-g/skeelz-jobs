@@ -10,6 +10,7 @@ const ERROR_LC = 'lc';
 const ERROR_FE = 'fe';
 const ERROR_VL = 'vl';
 const ERROR_SF = 'sf';
+const ERROR_RL = 'rl';
 
 
 export const ErrorManager = (location: string, codeNumber: number): string => {
@@ -51,6 +52,8 @@ export const ErrorManager = (location: string, codeNumber: number): string => {
                 return translations.JobsErrorMessages.QUICK_APPLY_DISABLED;
             case 11:
                 return translations.JobsErrorMessages.CV_REQUIRED;
+            case 13:
+                return translations.JobsErrorMessages.GUEST_ALREADY_APPLIED;
         }
 
     }
@@ -60,6 +63,10 @@ export const ErrorManager = (location: string, codeNumber: number): string => {
                 return translations.DatabaseErrorMessages.EMAIL_EXISTS;
         }
 
+    }
+    else if (location === ERROR_RL) {
+        // Too many requests (per-IP limits, server/src/routes.ts).
+        return translations.EmailCode.TooMany;
     }
     else if (location === ERROR_AU) {
         switch (codeNumber) {
@@ -75,6 +82,20 @@ export const ErrorManager = (location: string, codeNumber: number): string => {
                 return translations.AuthErrorMessages.STAFF_SSO_ONLY;
             case 11:
                 return translations.AuthErrorMessages.SSO_SIGNUP_EXPIRED;
+            case 12:
+                return translations.AuthErrorMessages.EMAIL_CODE_INVALID;
+            case 13:
+                return translations.AuthErrorMessages.EMAIL_CODE_LOCKED;
+            case 14:
+                return translations.AuthErrorMessages.EMAIL_CODE_WAIT;
+            case 15:
+                return translations.AuthErrorMessages.EMAIL_SIGNUP_EXPIRED;
+            case 16:
+                return translations.AuthErrorMessages.INVALID_EMAIL;
+            case 17:
+                return translations.AuthErrorMessages.ACCOUNT_UNAVAILABLE;
+            case 18:
+                return translations.AuthErrorMessages.EMAIL_CODE_DISABLED;
         }
     }
 
@@ -229,6 +250,9 @@ export const ErrorManager = (location: string, codeNumber: number): string => {
 
             case 20:
                 return translations.FilesRequest.MISSING_CV_PATH;
+
+            case 22:
+                return translations.FilesRequest.APPLICATION_CV_NOT_FOUND;
         }
 
     } else if (location === ERROR_VL) {

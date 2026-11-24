@@ -13,9 +13,10 @@
     "build": "tsc",
     "migrate": "node dist/scripts/migrate.js",
     "import:live": "node dist/scripts/importFromLive.js",
+    "sf:check": "node dist/scripts/salesforceCheck.js",
     "test": "node --import tsx --test test/*.test.mjs test/*.test.ts test/unit/*.test.ts",
     "test:unit": "node --import tsx --test test/*.test.ts test/unit/*.test.ts",
-    "db:local": "pglite-server --db=.pglite --port=5437 --max-connections=10"
+    "db:local": "pglite-server --db=.pglite --port=5437 --max-connections=20"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

@@ -36,6 +36,8 @@ export enum JobsErrorMessages {
     APPLY_JOB_AS_A_GUEST_FAILD = 'Failed to submit this job application as a guest',
     QUICK_APPLY_DISABLED = 'Quick apply is not available for this job; please register to apply',
     CV_REQUIRED = 'A CV is required to apply for this job',
+    GUEST_ALREADY_APPLIED = 'An application with this email address was already sent for this job',
+    SELF_APPLY_ONLY = 'This job is applied for directly with the employer (see the contact details on the job page)',
     INVALID_CV_CHOICE = 'The CV for this application is missing or invalid',
 }
 
@@ -51,7 +53,9 @@ export enum JobsErrorCodes {
     APPLY_JOB_AS_A_GUEST_FAILD = 'jb9',
     QUICK_APPLY_DISABLED = 'jb10',
     CV_REQUIRED = 'jb11',
+    SELF_APPLY_ONLY = 'jb12',
     INVALID_CV_CHOICE = 'jb12',
+    GUEST_ALREADY_APPLIED = 'jb13',
 }
 
 export enum LocationsErrorMessages {
@@ -91,6 +95,14 @@ export enum AuthErrorCodes {
     USER_ALREADY_EXISTS = 'au9',
     STAFF_SSO_ONLY = 'au10',
     SSO_SIGNUP_EXPIRED = 'au11',
+    // Sign-in by a code sent by email (controllers/emailSigninController.ts).
+    EMAIL_CODE_INVALID = 'au12',
+    EMAIL_CODE_LOCKED = 'au13',
+    EMAIL_CODE_WAIT = 'au14',
+    EMAIL_SIGNUP_EXPIRED = 'au15',
+    INVALID_EMAIL = 'au16',
+    ACCOUNT_UNAVAILABLE = 'au17',
+    EMAIL_CODE_DISABLED = 'au18',
 }
 
 export enum AuthErrorMessages {
@@ -105,30 +117,24 @@ export enum AuthErrorMessages {
     USER_ALREADY_EXISTS = 'User already exists',
     STAFF_SSO_ONLY = 'Staff accounts sign in with the staff (xhostd SSO) button only',
     SSO_SIGNUP_EXPIRED = 'The Google sign-up has expired: continue with Google again',
+    EMAIL_CODE_INVALID = 'The code is wrong or has expired',
+    EMAIL_CODE_LOCKED = 'Too many tries with this code: ask for a new one',
+    EMAIL_CODE_WAIT = 'Please wait before asking for another code',
+    EMAIL_SIGNUP_EXPIRED = 'The sign-up has expired: ask for a new code',
+    INVALID_EMAIL = 'Invalid email address',
+    ACCOUNT_UNAVAILABLE = 'This account cannot sign in',
+    EMAIL_CODE_DISABLED = 'Sign-in by email code is not available yet',
 }
 
 export enum EmailErrorCodes {
     EMAIL_FAILED = 'em1',
+    NOT_CONFIGURED = 'em2',
+    NETWORK = 'em3',
+    REFUSED = 'em4',
 }
 
 export enum EmailErrorMessages {
     EMAIL_FAILED = 'Failed to send email',
-}
-
-export enum ResetPasswordErrorCodes {
-    USER_NOT_FOUND = 're1',
-    TOKEN_NOT_FOUND = 're2',
-    INVALID_TOKEN = 're3',
-    VERIFY_FAILED = 're4',
-    TOKEN_EXPIRED = 're5',
-}
-
-export enum ResetPasswordErrorMessages {
-    USER_NOT_FOUND = 'User not found',
-    TOKEN_NOT_FOUND = 'Reset token not found',
-    INVALID_TOKEN = 'Invalid reset token',
-    VERIFY_FAILED = 'Verify token failed',
-    TOKEN_EXPIRED = 'Token expired',
 }
 
 export enum ValidationErrorMessages {
@@ -207,12 +213,13 @@ export enum FilesErrorCodes {
     GET_FILE_SIZE_FAILED = 'fe13',
     FILE_NOT_UPLOADED_OR_CLEAN = 'fe14',
     PDF_FILE_SANITIZATION_FAILED = 'fe15',
-    USER_NOT_FOUND = 'fe16.',
-    CV_NOT_FOUND =  'fe17.',
+    USER_NOT_FOUND = 'fe16',
+    CV_NOT_FOUND = 'fe17',
     NO_FILE_UPLOADED = 'fe18',
     MISSING_USER_ID_IN_PARAMS = 'fe219',
     MISSING_CV_PATH = 'fe20',
     FileNameEncodingFailed = "fe21",
+    APPLICATION_CV_NOT_FOUND = 'fe22',
 
     
 }
@@ -234,7 +241,8 @@ export enum FilesErrorMessages {
     FILE_NOT_UPLOADED_OR_CLEAN = 'Some files are not fully uploaded or clean',
     PDF_FILE_SANITIZATION_FAILED = 'Failed to scan or sanitize the PDF. Please upload a valid file.',
     USER_NOT_FOUND = 'Failed to find user.',
-    CV_NOT_FOUND = 'CV file not found',
+    CV_NOT_FOUND = 'This candidate has no CV on the profile',
+    APPLICATION_CV_NOT_FOUND = 'No CV was sent with this application',
     NO_FILE_UPLOADED = 'No file uploaded',
     MISSING_USER_ID_IN_PARAMS = 'Missing userID in request params',
     MISSING_CV_PATH = 'Missing CV path in the request body',

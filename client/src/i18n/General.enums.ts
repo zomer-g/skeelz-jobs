@@ -112,21 +112,53 @@ export interface StatusMessageState {
   isError: boolean;
 }
 
-// Separation of duties (server/src/models/enums.ts): content managers handle jobs and candidates,
-// admins handle security and staff users and see no candidates.
+// Roles (server/src/models/enums.ts): placement coordinators see candidates (view only) and manage jobs (no
+// threshold condition, no apply settings); content managers do all that plus candidates' records, forwards and the
+// job/candidate settings; admins can do all of that too, plus security, staff users and API keys.
 export enum UserRole {
   ADMIN = 'admin',
   CONTENT_MANAGER = 'content_manager',
+  PLACEMENT_COORDINATOR = 'placement_coordinator',
   USER = 'user',
+  EMPLOYER = 'employer',
 }
 
 export const ROLE_LABELS: Record<string, string> = {
   admin: 'מנהל מערכת',
   content_manager: 'מנהל תוכן',
+  placement_coordinator: 'רכז השמה',
   user: 'מועמד',
+  employer: 'מעסיק',
 };
 
-export const isStaffRole = (role?: string | null) => role === UserRole.ADMIN || role === UserRole.CONTENT_MANAGER;
+/** An employer's account (docs/employers.md): its own area only — never candidates' or staff screens. */
+export const isEmployerRole = (role?: string | null) => role === UserRole.EMPLOYER;
+
+/** Where "אזור אישי" leads: an employer's area, else the candidate's applications. */
+export const personalAreaRoute = (role?: string | null) =>
+  role === UserRole.EMPLOYER ? '/employer' : '/job-Applications-management';
+
+/* Several roles per account (owner, 23.11.2026): user.roles = the roles THIS session carries (the server leaves staff
+ * roles out of a session not made with Google); user.role = the highest of them. */
+type WithRoles = { role?: string | null; roles?: readonly string[] | null } | null | undefined;
+export const rolesOfUser = (u: WithRoles): string[] => (u?.roles?.length ? [...u.roles] : u?.role ? [u.role] : []);
+export const userHasRole = (u: WithRoles, r: UserRole): boolean => rolesOfUser(u).includes(r);
+export const isCandidateUser = (u: WithRoles) => userHasRole(u, UserRole.USER);
+export const isEmployerUser = (u: WithRoles) => userHasRole(u, UserRole.EMPLOYER);
+/** The staff role of the session, or '' (at most one per account). */
+export const staffRoleOfUser = (u: WithRoles): string =>
+  rolesOfUser(u).find((r) => r === UserRole.ADMIN || r === UserRole.CONTENT_MANAGER || r === UserRole.PLACEMENT_COORDINATOR) ?? '';
+
+/** Settings, candidates' records, forwards, threshold conditions, apply settings: content managers and admins. */
+export const canManageContent = (role?: string | null) => role === UserRole.ADMIN || role === UserRole.CONTENT_MANAGER;
+
+/** Jobs management and viewing candidates: placement coordinators, content managers and admins. */
+export const canViewStaffData = (role?: string | null) => canManageContent(role) || role === UserRole.PLACEMENT_COORDINATOR;
+
+export const isStaffRole = (role?: string | null) => canViewStaffData(role);
+
+/** Staff roles that see jobs management and candidates (route guards). */
+export const VIEWER_ROLES = [UserRole.PLACEMENT_COORDINATOR, UserRole.CONTENT_MANAGER, UserRole.ADMIN];
 
 /** Where a staff member's management area starts. */
 export const staffHomeRoute = (role?: string | null) =>

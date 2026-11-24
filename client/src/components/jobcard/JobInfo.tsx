@@ -14,7 +14,7 @@ function JobInfo(jobInfo: JobInfoData) {
 
   const MAX_LENGTH = 25;
   const displayText =
-    fullInfo.length > MAX_LENGTH ? fullInfo.slice(0, MAX_LENGTH) + '…' : fullInfo;
+    !jobInfo.noTruncate && fullInfo.length > MAX_LENGTH ? fullInfo.slice(0, MAX_LENGTH) + '…' : fullInfo;
 
   return (
     <div className='d-flex align-items-center height-2-375rem'>
@@ -27,7 +27,7 @@ function JobInfo(jobInfo: JobInfoData) {
           href={link}
           target="_blank"
           rel="noopener noreferrer"
-          className='font-RubikMedium text-decoration-underline text-primary'
+          className={`font-RubikMedium text-decoration-underline text-primary${jobInfo.noTruncate ? ' text-break' : ''}`}
           title={fullInfo}
         >
           {displayText}

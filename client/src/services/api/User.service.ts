@@ -16,15 +16,6 @@ export class UserService {
         return this.instance;
     }
 
-    async createNewUser(values:RegisterFormValues): Promise<any> {
-            const response: any  = await GlobalApiService.generalRequest(
-                RequestEnum.Post,
-                `${Routes.USERS}`,
-                values,
-            );
-            return response;  
-    }
-
     async updateUserById(id: string, values:EditUserValues): Promise<CreateUserResponse | string> {
         const result: CreateUserResponse | string  = await GlobalApiService.generalRequest(
             RequestEnum.Patch,
@@ -42,6 +33,22 @@ export class UserService {
     /** Saves the signed-in candidate's own details (the server allows only profile fields, never email/role). */
     async updateMe(values: Record<string, unknown>): Promise<MyProfile | string> {
         return GlobalApiService.generalRequest<MyProfile>(RequestEnum.Patch, `${Routes.ME}`, values);
+    }
+
+    /** Gives or withdraws the signed-in candidate's consent to marketing mail (server/src/security/consent.ts). */
+    /** The consent step at sign-in: accepts the current terms (+ the first marketing answer). */
+    async acceptTerms(marketingConsent?: boolean): Promise<MyProfile | string> {
+        return GlobalApiService.generalRequest<MyProfile>(RequestEnum.Put, `${Routes.MY_TERMS}`, { consent: true, ...(typeof marketingConsent === 'boolean' ? { marketingConsent } : {}) });
+    }
+
+    async setMarketingConsent(marketingConsent: boolean): Promise<MyProfile | string> {
+        return GlobalApiService.generalRequest<MyProfile>(RequestEnum.Put, `${Routes.MY_MARKETING_CONSENT}`, { marketingConsent });
+    }
+
+    /** Several roles per account (23.11.2026): adds the candidate or employer role to the signed-in account, with that
+     *  role's form (server/src/controllers/rolesController.ts). Never a staff role. */
+    async addMyRole(role: 'candidate' | 'employer', values: Record<string, unknown>): Promise<{ ok: boolean; role: string } | string> {
+        return GlobalApiService.generalRequest<{ ok: boolean; role: string }>(RequestEnum.Post, `${Routes.ME}/roles/${role}`, values);
     }
 
     /** Removes the CV from the signed-in candidate's own profile. */

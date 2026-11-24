@@ -2,10 +2,16 @@ import React from 'react';
 import { ClientRoutes } from '../../i18n/ClientRoutes.enum';
 import { analyticsEnabled, reopenConsent } from '../../utils/analytics';
 import { i18n } from '../../i18n/I18n';
+import InstallAppLink, { useInstallAvailable } from '../pwa/InstallApp';
 
 // Same frame as the board header and the job cards (`.board-frame`, App.scss).
 // The privacy policy and the accessibility statement links are required — keep them.
 const NEW_TAB_NOTE = '(נפתח בחלון חדש)';
+
+const InstallAppItem: React.FC = () => {
+    if (!useInstallAvailable()) return null;
+    return <li><InstallAppLink className="board-footer__link board-footer__link--button" /></li>;
+};
 
 const Footer: React.FC = () => {
     const translations = i18n.getTranslations();
@@ -36,14 +42,8 @@ const Footer: React.FC = () => {
                                     API ו-MCP למפתחים
                                 </a>
                             </li>
-                            {/* Only when the site measures at all (GTM_ID / GA_ID): change the cookie choice. */}
-                            {analyticsEnabled() && (
-                                <li>
-                                    <button type="button" className="board-footer__link btn btn-link p-0 align-baseline" onClick={reopenConsent}>
-                                        {i18n.getTranslations().Consent.FooterLink}
-                                    </button>
-                                </li>
-                            )}
+                            {/* Shown only where the site can be installed and is not already (docs/pwa.md). */}
+                            <InstallAppItem />
                             <li>
                                 <a
                                     className="board-footer__link"

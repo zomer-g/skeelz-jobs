@@ -18,10 +18,14 @@ const skill = {
   type: 'object', required: ['id', 'name'], additionalProperties: false,
   properties: { id: { type: 'string' }, name: { type: 'string' } },
 };
+const applyContact = {
+  type: 'object', required: ['name', 'email', 'phone'], additionalProperties: false,
+  properties: { name: { type: ['string', 'null'] }, email: { type: ['string', 'null'] }, phone: { type: ['string', 'null'] } },
+};
 const job = {
   type: 'object',
   additionalProperties: false,
-  required: ['id', 'jobNumber', 'title', 'companyName', 'description', 'jobScope', 'publishDate', 'location', 'skills', 'isSponsored', 'externalLink', 'url'],
+  required: ['id', 'jobNumber', 'title', 'companyName', 'description', 'jobScope', 'publishDate', 'location', 'skills', 'isSponsored', 'isPinned', 'externalLink', 'applyMode', 'applyContact', 'thresholdCondition', 'extraFields', 'url'],
   properties: {
     id: { type: 'string', pattern: '^[0-9a-f]{24}$' },
     jobNumber: { type: 'integer' },
@@ -33,7 +37,26 @@ const job = {
     location: { oneOf: [{ $ref: '#/components/schemas/Location' }, { type: 'null' }] },
     skills: { type: 'array', items: { $ref: '#/components/schemas/Skill' } },
     isSponsored: { type: 'boolean' },
+    isPinned: { type: 'boolean', description: 'Pinned by the editors: listed first until unpinned' },
     externalLink: { type: ['string', 'null'], format: 'uri' },
+    applyMode: {
+      type: 'string', enum: ['self', 'quick', 'none'],
+      description: 'How a visitor who is not signed in applies: self = directly with the employer (see applyContact / externalLink), '
+        + 'quick = the short form on the job page, none = sign in first. A signed-in candidate can always apply on the job page.',
+    },
+    applyContact: {
+      oneOf: [{ $ref: '#/components/schemas/ApplyContact' }, { type: 'null' }],
+      description: 'The employer\'s contact for applicants. Only when applyMode is self; otherwise null.',
+    },
+    thresholdCondition: {
+      type: ['string', 'null'], maxLength: 500,
+      description: 'Threshold condition (plain text): a job seeker confirms meeting it on the job page before the application is accepted. null = none.',
+    },
+    extraFields: {
+      type: 'array', description: 'Further details the editors added to this job and show on the job page (plain text). [] = none.',
+      items: { type: 'object', required: ['label', 'value'], additionalProperties: false,
+        properties: { label: { type: 'string', maxLength: 80 }, value: { type: 'string', maxLength: 500 } } },
+    },
     url: { type: 'string', format: 'uri', description: 'The job page on the board (apply there)' },
   },
 };
@@ -115,6 +138,7 @@ export const openApiSpec = () => ({
       NearJob: nearJob,
       Location: location,
       Skill: skill,
+      ApplyContact: applyContact,
       JobPage: jobPage('Job'),
       NearPage: jobPage('NearJob', { remote: { type: 'integer' }, withoutCoordinates: { type: 'integer' } }),
       Error: { type: 'object', required: ['message', 'code'], properties: { message: { type: 'string' }, code: { type: 'string' } } },

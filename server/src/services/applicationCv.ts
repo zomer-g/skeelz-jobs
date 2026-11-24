@@ -83,28 +83,4 @@ export const resolveApplicationCv = async (
   return { cvFileUrl: key, cvScope: CvScope.JOB };
 };
 
-export interface SalesforceCvDeps {
-  createCase: () => Promise<string | undefined>;
-  attachCv: (cvFileUrl: string, caseId: string) => Promise<void>;
-  log?: (msg: string) => void;
-}
-
-/**
- * Creates the application Case and attaches the application's own CV to it
- * (not whatever the profile holds by then). A failed attachment is logged and
- * does not undo an application that was already recorded.
- */
-export const sendApplicationToSalesforce = async (
-  application: { _id: string; cvFileUrl?: string },
-  deps: SalesforceCvDeps
-): Promise<{ caseId?: string; cvAttached: boolean }> => {
-  const caseId = await deps.createCase();
-  if (!caseId || !application.cvFileUrl) return { caseId, cvAttached: false };
-  try {
-    await deps.attachCv(application.cvFileUrl, caseId);
-    return { caseId, cvAttached: true };
-  } catch (error) {
-    (deps.log ?? console.error)(`[salesforce] could not attach the CV of application ${application._id} to Case ${caseId}: ${(error as Error)?.message ?? error}`);
-    return { caseId, cvAttached: false };
-  }
-};
+// The application's own CV goes on its Salesforce Case through the sync queue (services/salesforceSync.ts).

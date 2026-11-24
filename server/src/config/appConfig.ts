@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import { Config } from '../models/interfaces/config.js';
+import { readSalesforceSettings } from './salesforceSettings.js';
 
 dotenv.config();
 
@@ -18,7 +19,7 @@ const appConfig: Config = {
     useOTP: process.env.USE_OTP === 'true',
     sourceEmail: process.env.SOURCE_EMAIL || '',
     emailDisplayName: process.env.EMAIL_DISPLAY_NAME || 'SKEELZ',
-    // No email provider is connected (see services/emailService.ts); this flag no longer sends anything.
+    // Email goes out through Resend only when this is true (and RESEND_API_KEY + EMAIL_FROM are set): services/emailService.ts.
     sendEmailDisabled: process.env.SEND_EMAIL_ENABLED !== 'true',
     clientBaseUrl: process.env.CLIENT_BASE_URL || process.env.BASE_URL || '',
     applicationNotificationEmail: process.env.APPLICATION_NOTIFICATION_EMAIL || '',
@@ -28,20 +29,15 @@ const appConfig: Config = {
         smooveApiKey : process.env.SMOOVE_API_KEY || '',
         smooveListId : process.env.SMOOVE_LIST_ID || '',
         smooveGuestListId : process.env.SMOOVE_GUEST_LIST_ID || '',
-        smooveApiUrl : "https://rest.smoove.io/v1/contacts",
+        // SMOOVE_API_URL (a local mock for test/e2e-consent.mjs) is honoured ONLY with DEV_MODE=true.
+        smooveApiUrl : (process.env.DEV_MODE === 'true' && process.env.SMOOVE_API_URL) || "https://rest.smoove.io/v1/contacts",
     },
-    salesforce: {
-        enableSalesforce: process.env.ENABLE_SALESFORCE == 'true',
-        clientId: process.env.SALESFORCE_CLIENT_ID || '',
-        clientSecret: process.env.SALESFORCE_CLIENT_SECRET || '',
-        loginUrl: process.env.SALESFORCE_LOGIN_URL || 'https://login.salesforce.com',
-        apiVersion: process.env.SALESFORCE_API_VERSION || 'v57.0',
-        contactsAccountId: process.env.SALESFORCE_CONTACTS_ACCOUNT_ID || '',
-        jobCaseAccountId: process.env.SALESFORCE_CASE_ACCOUNT_ID || '',
-        jobCaseRecordTypeId: process.env.SALESFORCE_CASE_RECORD_TYPE_ID || '',
-        jobApplicationsCaseAccountId: process.env.SALESFORCE_JOBAPPLICATIONS_ACCOUNT_ID || '',
-        jobApplicationsCaseRecordTypeId: process.env.SALESFORCE_JOBAPPLICATIONS_CASE_RECORD_TYPE_ID || '',
-    }
+    // Every Salesforce setting is validated in salesforceSettings.ts; `enableSalesforce` is true only when
+    // ENABLE_SALESFORCE=true AND all of them are valid (and not in the sandbox).
+    salesforce: (() => {
+        const s = readSalesforceSettings(process.env);
+        return { ...s, enableSalesforce: s.enabled };
+    })(),
 };
 
 export default appConfig;

@@ -70,7 +70,7 @@ export const createPublicMcpServer = () => {
 
   server.registerTool('search_jobs', {
     title: 'Search jobs',
-    description: 'Search the active jobs on the board, in board order (jobs pinned by the editors first, then newest first). Filter by text, location (city or district name, '
+    description: 'Search the active jobs on the board, in board order (jobs pinned by the editors first, isPinned: true; then newest first, a job bumped by the editors counting as new). Filter by text, location (city or district name, '
       + 'or city symbol), skills and scope. Returns { data, page, limit, total }.',
     inputSchema: {
       ...textFilters,
@@ -85,7 +85,11 @@ export const createPublicMcpServer = () => {
 
   server.registerTool('get_job', {
     title: 'Get a job',
-    description: 'One active job by its id (24 hex characters) or job number, with the full description (HTML).',
+    description: 'One active job by its id (24 hex characters) or job number, with the full description (HTML). '
+      + 'applyMode says how to apply without signing in: self = directly with the employer (applyContact / externalLink), '
+      + 'quick = the short form on the job page (url), none = sign in on the job page first. '
+      + 'thresholdCondition (plain text, or null) is a requirement a job seeker must confirm meeting on the job page before the application is accepted. '
+      + 'extraFields lists further details the editors show on the job page (label + plain-text value).',
     inputSchema: { id: z.string().max(30).describe('Job id or job number') },
     annotations: { title: 'Get a job', ...READ_ONLY },
   }, (a) => run(async () => {

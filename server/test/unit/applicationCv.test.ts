@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  CvMode, CvScope, parseCvChoice, resolveApplicationCv, sendApplicationToSalesforce, type CvDeps,
+  CvMode, CvScope, parseCvChoice, resolveApplicationCv, type CvDeps,
 } from '../../src/services/applicationCv.js';
 
 const PROFILE_KEY = 'post-scan/profile-token-1234/old_cv.pdf';
@@ -87,41 +87,4 @@ test('the same upload cannot be used twice', async () => {
   const choice = { mode: CvMode.JOB_ONLY, cvFilePath: 'new-token-12345678/new_cv.pdf' } as const;
   await resolveApplicationCv(choice, user, deps);
   await assert.rejects(resolveApplicationCv(choice, { id: 'u3' }, deps));
-});
-
-test('Salesforce: the Case gets the application\'s own CV (job-only), not the profile one', async () => {
-  const attached: Array<[string, string]> = [];
-  const r = await sendApplicationToSalesforce({ _id: 'a1', cvFileUrl: NEW_KEY }, {
-    createCase: async () => 'CASE1',
-    attachCv: async (key, caseId) => { attached.push([key, caseId]); },
-  });
-  assert.deepEqual(r, { caseId: 'CASE1', cvAttached: true });
-  assert.deepEqual(attached, [[NEW_KEY, 'CASE1']]);
-});
-
-test('Salesforce: no CV -> nothing attached; no Case id -> nothing attached', async () => {
-  let calls = 0;
-  const attachCv = async () => { calls++; };
-  assert.deepEqual(await sendApplicationToSalesforce({ _id: 'a1', cvFileUrl: '' }, { createCase: async () => 'C', attachCv }), { caseId: 'C', cvAttached: false });
-  assert.deepEqual(await sendApplicationToSalesforce({ _id: 'a1', cvFileUrl: NEW_KEY }, { createCase: async () => undefined, attachCv }), { caseId: undefined, cvAttached: false });
-  assert.equal(calls, 0);
-});
-
-test('Salesforce: a failed CV attachment is logged and does not fail the application', async () => {
-  const logs: string[] = [];
-  const r = await sendApplicationToSalesforce({ _id: 'a1', cvFileUrl: NEW_KEY }, {
-    createCase: async () => 'CASE1',
-    attachCv: async () => { throw new Error('boom'); },
-    log: (m) => logs.push(m),
-  });
-  assert.deepEqual(r, { caseId: 'CASE1', cvAttached: false });
-  assert.equal(logs.length, 1);
-  assert.doesNotMatch(logs[0], /post-scan|new_cv/); // no file names in logs
-});
-
-test('Salesforce: a failed Case creation still throws (existing behaviour)', async () => {
-  await assert.rejects(sendApplicationToSalesforce({ _id: 'a1', cvFileUrl: NEW_KEY }, {
-    createCase: async () => { throw new Error('sf down'); },
-    attachCv: async () => {},
-  }));
 });

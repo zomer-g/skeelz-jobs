@@ -1,21 +1,25 @@
-import { DataGrid, GridColDef, GridPaginationModel } from '@mui/x-data-grid';
-import Paper from '@mui/material/Paper';
+import { GridPaginationModel } from '@mui/x-data-grid';
 import {keyValue, userProfile } from '../../models/interfaces/Props.interfaces';
+import MarketingStatus from './MarketingStatus';
 import { i18n } from '../../i18n/I18n';
-import { formatDate } from '../../utils/utils';
-import { createTheme, ThemeProvider, useTheme } from '@mui/material';
+import { formatDate, getDefaultFilenameByMime, isString } from '../../utils/utils';
+import { UploadFileService } from '../../services/api/UploadFile.service';
+import useToastStore from '../../store/Toast.store';
+import { TablePagination, useMediaQuery } from '@mui/material';
+import RtlProvider from '@mui/system/RtlProvider';
 import React, { useEffect, useRef, useState } from 'react';
 import useModalStore from '../../store/Modal.store';
-import { dataGridStyle } from '../common/dataGridStyle';
 import ListDisplay from '../common/ListDisplay';
 import {ArchiveIcon, EyeIcon, SortArrows, TrashIcon, WarningIcon} from '../../icons';
-import { arSD } from '@mui/material/locale';
 import Button from '../common/Button';
 import { UploadFileModal } from '../common/UploadFileModal';
+import { ROLE_LABELS } from '../../i18n/General.enums';
 
 interface UserTableProps {
     users: userProfile[];
     handleSortChange: (field: string | null, sort: 'asc' | 'desc' | null) => void;
+    /** The sort in force (UsersManagement keeps it; the server sorts). */
+    sortConfig: { field: string | null; sort: SortDirection };
     paginationModel: GridPaginationModel; // The current pagination model (page and pageSize)
     setPaginationModel: React.Dispatch<React.SetStateAction<GridPaginationModel>>; // Function to update pagination model
     totalUsers: number;
@@ -23,13 +27,29 @@ interface UserTableProps {
     downloadFile: (userId: string) => Promise<void>;
     uploadFile: (userId: string, cvFilePath:string) => Promise<string | void>;
     previewFile: (userId: string) => Promise<void>;
+    /** A placement coordinator sees candidates but changes nothing (no CV unlink). */
+    readOnly?: boolean;
+    /** Reload the list (after a marketing removal). */
+    onChanged?: () => void;
 }
 
 const translations = i18n.getTranslations();
 
+type SortDirection = 'asc' | 'desc' | null;
+// The columns the server sorts candidates by (SORT_COLUMNS in server/src/dal/userDAL.ts); others have no sort button.
+const SORTABLE: { field: string; label: string }[] = [
+    { field: 'firstName', label: translations.UserProfile.FirstName },
+    { field: 'lastName', label: translations.UserProfile.LastName },
+    { field: 'location', label: translations.UserProfile.Location },
+    { field: 'dateOfBirth', label: translations.UserProfile.DateOfBirth },
+    { field: 'email', label: translations.UserProfile.Email },
+    { field: 'phoneNumber', label: translations.UserProfile.PhoneNumber },
+];
+
 const UserTable: React.FC<UserTableProps> = ({
     users,
     handleSortChange,
+    sortConfig,
     paginationModel, // The current pagination model (page and pageSize)
     setPaginationModel,
      totalUsers,
@@ -37,11 +57,10 @@ const UserTable: React.FC<UserTableProps> = ({
      downloadFile,
      uploadFile,
      previewFile,
+     readOnly = false,
+     onChanged = () => undefined,
 }) => {
 
-    type SortDirection = 'asc' | 'desc' | null;
-    const [sortDirection, setSortDirection] = useState<SortDirection>(null);
-    const [field, setField] = useState("null");
     const { initModal } = useModalStore();
     const [cvFilePath, setCvFilePath] = useState('');
     
@@ -68,14 +87,53 @@ const UserTable: React.FC<UserTableProps> = ({
       };
 
     
-    function openJobApplicationsModal(jobApplications: keyValue[]) {
+    // The CV sent with one application (a CV for that job only is not on the profile): the server's CV hand-over
+    // (daily limit, strict log before the file leaves, alerts).
+    async function downloadApplicationCv(userId: string, jobId: string) {
+        const result = await UploadFileService.getInstance().fetchApplicationCv(userId, jobId);
+        if (isString(result)) { useToastStore.getState().showToast(result, 'error'); return; }
+        const contentType = String(result.headers['content-type'] || 'application/octet-stream');
+        const blob = new Blob([result.data], { type: contentType });
+        const disposition = result.headers['content-disposition'] ? String(result.headers['content-disposition']) : undefined;
+        const star = disposition?.match(/filename\*=UTF-8''([^;]+)/);
+        const plain = disposition?.match(/filename="?([^";]+)"?/);
+        const filename = (star ? decodeURIComponent(star[1]) : plain?.[1]) || getDefaultFilenameByMime(contentType);
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        window.URL.revokeObjectURL(url);
+        useToastStore.getState().showToast(translations.Cv.DownloadedFile, 'success');
+    }
+
+    function openJobApplicationsModal(row: { _id?: string; jobApplicationsToDisplay?: unknown; applicationCvJobs?: string[] }) {
+        const jobApplications = row.jobApplicationsToDisplay as keyValue[];
+        const entries: [string, string][] = jobApplications && !Array.isArray(jobApplications) && typeof jobApplications === 'object'
+            ? Object.entries(jobApplications as unknown as Record<string, string>) : [];
+        const withCv = new Set((row.applicationCvJobs ?? []).map(String));
         initModal({
             active: true,
             modalTitle: translations.UserProfile.JobApplications,
             modalBody: 
                 <div className='overflow-auto  custom-scrollbar min-h-40vh max-h-60vh pb-5 text-center'>
                     <div className='px-2'>
-                        <ListDisplay items={jobApplications}/>
+                        {entries.length && withCv.size && row._id ? (
+                            <ul className="list-group">
+                                {entries.map(([jobId, title]) => (
+                                    <li key={jobId} className="list-group-item font-RubikRegular d-flex justify-content-between align-items-center gap-2 flex-wrap">
+                                        <span>{title}</span>
+                                        {withCv.has(jobId) && (
+                                            <button type="button" className="btn btn-link p-0 text-color-purple"
+                                                aria-label={`${translations.UserProfile.ApplicationCv}: ${title}`}
+                                                onClick={() => downloadApplicationCv(String(row._id), jobId)}>
+                                                {translations.UserProfile.ApplicationCv}
+                                            </button>
+                                        )}
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : <ListDisplay items={jobApplications}/>}
                     </div>
                 </div>
                 
@@ -88,6 +146,25 @@ const UserTable: React.FC<UserTableProps> = ({
             }
         });
     }
+    // Answers to the questions content managers added to the sign-up form (settings screen). Shown here only (the
+    // list already went through the hand-over: daily limit + log); never to employers.
+    type Extra = { id: string; label: string; value: string; active: boolean };
+    function openExtraDetailsModal(name: string, extra: Extra[]) {
+        initModal({
+            active: true,
+            modalTitle: `פרטים נוספים: ${name}`,
+            modalBody:
+            <dl dir="rtl" className='min-h-20vh max-h-60vh overflow-auto p-4 m-0' data-testid="extra-details">
+                {extra.map((x) => (
+                    <div key={x.id} className="mb-3">
+                        <dt className="font-RubikBold">{x.label}{!x.active && <span className="text-color-dark-grey font-RubikRegular"> (שדה כבוי)</span>}</dt>
+                        <dd className="font-RubikRegular m-0" style={{ whiteSpace: 'pre-line' }}>{x.value}</dd>
+                    </div>
+                ))}
+            </dl>,
+        });
+    }
+
     function openUserSkillsModal(requiredSkillsDetails : keyValue[]) {
         initModal({
             active: true,
@@ -208,320 +285,30 @@ const UserTable: React.FC<UserTableProps> = ({
             });
           };
 
-    const handleHeaderClick = (columnName: string) => {
-        setField(columnName)
-        if (sortDirection === null) {
-            setSortDirection('asc');
-          } else if (sortDirection === 'asc') {
-            setSortDirection('desc');
-          } else {
-            setSortDirection(null);
-          }
-
-          handleSortChange(field, sortDirection);
+    // One click: this column ascending → descending → no sort. Another column starts ascending. The new value is
+    // computed here and sent as is (the old code sent the previous click's state: always one click behind).
+    const handleHeaderClick = (column: string) => {
+        const dir: SortDirection = sortConfig.field !== column ? 'asc' : sortConfig.sort === 'asc' ? 'desc' : sortConfig.sort === 'desc' ? null : 'asc';
+        handleSortChange(dir ? column : null, dir);
     };
 
-    const columns: GridColDef[] = [
-        {
-            field: 'firstName',
-            headerClassName: 'font-RubikMedium',
-            headerName: translations.UserProfile.FirstName,
-            sortable: false,
-            width: 130,
-            renderHeader: (params) => (
-                <div className="d-flex justify-content-between width-8rem">
-                    <span>{translations.UserProfile.FirstName}</span>
-                    <span
-                        onClick={() => {
-                            handleHeaderClick(params.field);
-                        }}
-                        className="cursor-pointer"
-                    >
-                        <SortArrows size={20} color="black" />
-                    </span>
-                </div>
-            )
-        },
-        
-        {
-            field: 'lastName',
-            headerClassName: 'font-RubikMedium',
-            headerName: translations.UserProfile.LastName,
-            sortable: false,
-            width: 130,
-            renderHeader: (params) => (
-                <div className="d-flex justify-content-between width-8rem">
-                    <span>{translations.UserProfile.LastName}</span>
-                    <span
-                        onClick={() => {
-                            handleHeaderClick(params.field);
-                        }}
-                        className="cursor-pointer"
-                    >
-                        <SortArrows size={20} color="black" />
-                    </span>
-                </div>
-            )
-        },
-        
-        {
-            field: 'location',
-            headerClassName: 'font-RubikMedium',
-            headerName: translations.UserProfile.Location,
-            sortable: false,
-            width: 130,
-            renderHeader: (params) => (
-                <div className="d-flex justify-content-between width-8rem">
-                    <span>{translations.UserProfile.Location}</span>
-                    <span
-                        onClick={() => {
-                            handleHeaderClick(params.field);
-                        }}
-                        className="cursor-pointer"
-                    >
-                        <SortArrows size={20} color="black" />
-                    </span>
-                </div>
-            )
-        },
-        
-        {
-            field: 'dateOfBirth',
-            headerClassName: 'font-RubikMedium',
-            headerName: translations.UserProfile.DateOfBirth,
-            sortable: false,
-            width: 130,
-            renderHeader: (params) => (
-                <div className="d-flex justify-content-between width-8rem">
-                    <span>{translations.UserProfile.DateOfBirth}</span>
-                    <span
-                        onClick={() => {
-                            handleHeaderClick(params.field);
-                        }}
-                        className="cursor-pointer"
-                    >
-                        <SortArrows size={20} color="black" />
-                    </span>
-                </div>
-            ),
-            renderCell: (params) => (
-                <>
-                    {formatDate(params.row.dateOfBirth)}
-                </>
-            )
-        },
-        
-       
-        {
-            field: 'gender',
-            headerClassName: 'font-RubikMedium',
-            headerName: translations.UserProfile.Gender,
-            sortable: false,
-            width: 120,
-            renderHeader: (params) => (
-                <div className="d-flex justify-content-between width-8rem">
-                    <span>{translations.UserProfile.Gender}</span>
-                    <span
-                        onClick={() => {
-                            handleHeaderClick(params.field);
-                        }}
-                        className="cursor-pointer"
-                    >
-                        <SortArrows size={20} color="black" />
-                    </span>
-                </div>
-            ),
-            renderCell: (params) => (
-                <>
-                    {translations.UserProfile[params.row.gender as keyof typeof translations.UserProfile]}
-                </>
-            )
-        },
-        
-        {
-            field: 'skills',
-            headerClassName: 'font-RubikMedium',
-            headerName: translations.UserProfile.Skills,
-            sortable: false,
-            width: 110,
-            renderHeader: (params) => (
-                <div className="d-flex justify-content-between width-8rem">
-                    <span>{translations.UserProfile.Skills}</span>
-                    <span
-                        onClick={() => {
-                            handleHeaderClick(params.field);
-                        }}
-                        className="cursor-pointer"
-                    >
-                        <SortArrows size={20} color="black" />
-                    </span>
-                </div>
-            ),
-            renderCell: (params) => (
-                <>
-                    {params.row.skills && params.row.skills.length > 0 && (
-                        <button
-                            type="button"
-                            className="btn"
-                            onClick={() => openUserSkillsModal(params.row.requiredSkillsDetails)}
-                        >
-                            <i className="bi bi-person-vcard"></i>
-                        </button>
-                    )}
-                </>
-            )
-        },
-        
-        {
-            field: 'email',
-            headerClassName: 'font-RubikMedium',
-            headerName: translations.UserProfile.Email,
-            sortable: false,
-            width: 140,
-            renderHeader: (params) => (
-                <div className="d-flex justify-content-between width-8rem">
-                    <span>{translations.UserProfile.Email}</span>
-                    <span
-                        onClick={() => {
-                            handleHeaderClick(params.field);
-                        }}
-                        className="cursor-pointer"
-                    >
-                        <SortArrows size={20} color="black" />
-                    </span>
-                </div>
-            )
-        },
-        {
-            field: 'phoneNumber',
-            headerClassName: 'font-RubikMedium',
-            headerName: translations.UserProfile.PhoneNumber,
-            sortable: false,
-            width: 130,
-            renderHeader: (params) => (
-                <div className="d-flex justify-content-between width-8rem">
-                    <span>{translations.UserProfile.PhoneNumber}</span>
-                    <span
-                        onClick={() => {
-                            handleHeaderClick(params.field);
-                        }}
-                        className="cursor-pointer"
-                    >
-                        <SortArrows size={20} color="black" />
-                    </span>
-                </div>
-            )
-        },
-
-        {
-            field: 'jobApplications', 
-            headerClassName: 'font-RubikMedium ', 
-            headerName: translations.UserProfile.JobApplications, 
-            width: 134,
-            sortable: false,
-            renderHeader: (params) => (
-                <div className="d-flex justify-content-between width-8rem">
-                    <span>{translations.UserProfile.JobApplications}</span>
-                    <span
-                        onClick={() => {
-                            handleHeaderClick(params.field);
-                        }}
-                        className="cursor-pointer"
-                    >
-                        <SortArrows size={20} color="black" />
-                    </span>
-                </div>
-            ),
-            renderCell: (params) => (
-                <>
-                    {
-                     params.row.jobApplicationsToDisplay &&
-                     Object.keys(params.row.jobApplicationsToDisplay).length > 0 && 
-                      (
-                        <button
-                            type="button"
-                            className="btn"
-                            onClick={() => openJobApplicationsModal(params.row.jobApplicationsToDisplay)}
-                        >
-                            <ArchiveIcon/>
-                        </button>
-                    )}
-                </>
-            )
-        },
-        {
-            field: 'cvFileUrl', 
-            headerClassName: 'font-RubikMedium ', 
-            headerName: translations.UserProfile.Cv, 
-            width: 134,
-            sortable: false,
-            renderHeader: (params) => (
-                <div className="d-flex justify-content-between width-8rem">
-                    <span>{translations.UserProfile.Cv}</span>
-                    <span
-                        onClick={() => {
-                            handleHeaderClick(params.field);
-                        }}
-                        className="cursor-pointer"
-                    >
-                        <SortArrows size={20} color="black" />
-                    </span>
-                </div>
-            ),
-            renderCell: (params) => (
-                <>
-                    {
-                     params.row.cvFileUrl ?
-                      (
-                        <div className='justify-content-center'>
-                            <button
-                                type="button"
-                                className="btn"
-                                onClick={() => previewFile(params.row._id)}
-                            >
-                                <EyeIcon/>
-                            </button>
-                            <button
-                                type="button"
-                                className="btn"
-                                onClick={() => deleteCvModal(params.row.cvFileUrl, params.row._id, params.row.id)}
-                            >
-                                <TrashIcon/>
-                            </button>
-                        </div>
-                    ): 
-                        <Button
-                        type="button"
-                        className="btn h-2-5rem text-color-dark-green border-color-dark-green-2-2px rounded-pill width-7rem mt-1"
-                        onClick={() => UploadCvModal(params.row._id, params.row.id)}
-                        >
-                            {translations.Cv.UploadCvShortcut}
-                        </Button>
-                    }
-                </>
-            )
-        },
-        {
-            field: 'role',
-            headerClassName: 'font-RubikMedium',
-            headerName: translations.UserProfile.Role,
-            sortable: false,
-            width: 140,
-            renderHeader: (params) => (
-                <div className="d-flex justify-content-between width-8rem">
-                    <span>{translations.UserProfile.Role}</span>
-                    <span
-                        onClick={() => {
-                            handleHeaderClick(params.field);
-                        }}
-                        className="cursor-pointer"
-                    >
-                        <SortArrows size={20} color="black" />
-                    </span>
-                </div>
-            )
-        }
-    ];
+    // Header: the label, and a sort button only on the columns the server sorts by (SORTABLE).
+    const sortHeader = (column: string, label: string) => {
+        if (!SORTABLE.some((c) => c.field === column)) return <span>{label}</span>;
+        const dir = sortConfig.field === column ? sortConfig.sort : null;
+        const state = dir === 'asc' ? 'סדר עולה' : dir === 'desc' ? 'סדר יורד' : 'לא ממוין';
+        return (
+            <div className="d-flex align-items-center gap-1">
+                <span>{label}</span>
+                <button type="button" className="users-sort-btn" onClick={() => handleHeaderClick(column)}
+                    aria-label={`מיון לפי ${label} (כרגע: ${state})`} title={`מיון לפי ${label}`}>
+                    {dir === 'asc' ? <i className="bi bi-arrow-up" aria-hidden="true"></i>
+                        : dir === 'desc' ? <i className="bi bi-arrow-down" aria-hidden="true"></i>
+                        : <SortArrows size={20} color="black" />}
+                </button>
+            </div>
+        );
+    };
 
     const rows = currUsers.map((user, index) => ({
         id: index,
@@ -535,7 +322,13 @@ const UserTable: React.FC<UserTableProps> = ({
         gender: user.gender,
         jobApplications: user.jobApplications,
         jobApplicationsToDisplay: user.jobApplicationsToDisplay,
+        // Applications sent with a CV (job ids), opened one by one through the CV hand-over.
+        applicationCvJobs: ((user as any).applicationCvJobs ?? []) as string[],
         phoneNumber: user.phoneNumber,
+        idNumber: (user as any).idNumber ?? '',
+        extraDetails: ((user as any).extraDetails ?? []) as Extra[],
+        // Marketing mail state from the staff list (GET /api/users): agreed / not_agreed / removed / unknown.
+        marketing: (user as any).marketing ?? null,
         skills: user.skills,
         requiredSkillsDetails: user.requiredSkillsDetails,
         role: user.role,
@@ -552,53 +345,203 @@ const UserTable: React.FC<UserTableProps> = ({
         }
     }
     
-    const existingTheme = useTheme();
-    
-    const theme = React.useMemo(
-        () =>
-          createTheme({}, arSD, existingTheme, {
-            direction: 'rtl',
-          }),
-        [existingTheme],
-      );
-      
+    // Phones: one card per candidate (same rows, same fields, same actions as the table; the same page of the list).
+    const isPhone = useMediaQuery('(max-width: 767.98px)', { noSsr: true });
+    // RtlProvider: MUI picks the arrows by direction (default ltr), so in this RTL page "next" pointed right. With it,
+    // next is the left arrow (<) on the left and previous the right arrow (>) beside the count (owner, 23.11.2026).
+    const pager = (
+        <RtlProvider value>
+        <TablePagination
+            component="div"
+            className="users-pager"
+            count={totalUsers}
+            page={paginationModel.page}
+            rowsPerPage={paginationModel.pageSize}
+            rowsPerPageOptions={[]}
+            onPageChange={(_e, page) => handlePaginationChange(page, paginationModel.pageSize)}
+            labelDisplayedRows={({ from, to, count }) => `${from}-${to} מתוך ${count !== -1 ? count : `יותר מ ${to}`}`}
+            getItemAriaLabel={(type) => (type === 'next' ? 'לעמוד הבא' : type === 'previous' ? 'לעמוד הקודם' : type === 'first' ? 'לעמוד הראשון' : 'לעמוד האחרון')}
+        />
+        </RtlProvider>
+    );
+    if (isPhone) {
+        const P = translations.UserProfile;
+        const field = (label: string, value: React.ReactNode, ltr = false, wide = false) => (
+            <div className={`users-card__field${wide ? ' users-card__field--wide' : ''}`}>
+                <dt>{label}</dt>
+                <dd dir={ltr ? 'ltr' : undefined}>{value || '—'}</dd>
+            </div>
+        );
+        return (
+            <div dir='rtl' className="users-cards">
+                {/* Sort on a phone: the same server sort as the table's header buttons. */}
+                <div className="users-cards__sort">
+                    <label>
+                        <span>מיון לפי</span>
+                        <select className="form-select" value={sortConfig.field ?? ''}
+                            onChange={(e) => handleSortChange(e.target.value || null, e.target.value ? (sortConfig.sort ?? 'asc') : null)}>
+                            <option value="">ללא מיון</option>
+                            {SORTABLE.map((c) => <option key={c.field} value={c.field}>{c.label}</option>)}
+                        </select>
+                    </label>
+                    <label>
+                        <span>סדר</span>
+                        <select className="form-select" value={sortConfig.sort ?? 'asc'} disabled={!sortConfig.field}
+                            onChange={(e) => handleSortChange(sortConfig.field, e.target.value as SortDirection)}>
+                            <option value="asc">עולה</option>
+                            <option value="desc">יורד</option>
+                        </select>
+                    </label>
+                </div>
+                {rows.length === 0 && <p className="users-cards__empty">אין נתונים להצגה</p>}
+                <ul className="users-cards__list">
+                    {rows.map((row) => {
+                        const hasSkills = !!(row.skills && row.skills.length > 0);
+                        const hasApplications = !!(row.jobApplicationsToDisplay && Object.keys(row.jobApplicationsToDisplay).length > 0);
+                        return (
+                            <li key={row._id} className="users-card">
+                                <h2 className="users-card__name">{[row.firstName, row.lastName].filter(Boolean).join(' ')}</h2>
+                                <dl className="users-card__fields">
+                                    {field(P.Location, row.location)}
+                                    {field(P.DateOfBirth, row.dateOfBirth ? formatDate(row.dateOfBirth as any) : '')}
+                                    {field(P.Gender, translations.UserProfile[row.gender as keyof typeof translations.UserProfile])}
+                                    {field(P.Role, ROLE_LABELS[row.role as string] ?? row.role)}
+                                    {field(P.Email, row.email, true, true)}
+                                    <div className="users-card__field"><dt>דיוור שיווקי</dt><dd><MarketingStatus id={row._id} name={[row.firstName, row.lastName].filter(Boolean).join(' ')} value={(row as any).marketing} readOnly={readOnly} onChanged={onChanged} /></dd></div>
+                                    {field(P.PhoneNumber, row.phoneNumber, true)}
+                                    {field(translations.Register.IdNumber, row.idNumber, true)}
+                                </dl>
+                                {(hasSkills || hasApplications || row.cvFileUrl || row.extraDetails.length > 0) && (
+                                    <div className="users-card__actions">
+                                        {row.extraDetails.length > 0 && (
+                                            <button type="button" className="users-card__action" onClick={() => openExtraDetailsModal([row.firstName, row.lastName].filter(Boolean).join(' '), row.extraDetails)}>
+                                                <i className="bi bi-list-ul" aria-hidden="true"></i> פרטים נוספים
+                                            </button>
+                                        )}
+                                        {hasSkills && (
+                                            <button type="button" className="users-card__action" onClick={() => openUserSkillsModal(row.requiredSkillsDetails as keyValue[])}>
+                                                <i className="bi bi-person-vcard" aria-hidden="true"></i> {P.Skills}
+                                            </button>
+                                        )}
+                                        {hasApplications && (
+                                            <button type="button" className="users-card__action" onClick={() => openJobApplicationsModal(row)}>
+                                                <ArchiveIcon /> {P.JobApplications}
+                                            </button>
+                                        )}
+                                        {row.cvFileUrl && (
+                                            <button type="button" className="users-card__action" onClick={() => previewFile(row._id as string)}>
+                                                <EyeIcon /> {P.Cv}
+                                            </button>
+                                        )}
+                                        {row.cvFileUrl && !readOnly && (
+                                            <button type="button" className="users-card__action users-card__action--danger" aria-label={`${translations.Cv.DeleteCvTitle}: ${row.firstName ?? ''} ${row.lastName ?? ''}`}
+                                                onClick={() => deleteCvModal(row.cvFileUrl as string, row._id as string, row.id)}>
+                                                <TrashIcon />
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                            </li>
+                        );
+                    })}
+                </ul>
+                {pager}
+            </div>
+        );
+    }
+
+    // Wider screens: ONE html table, so the header row and the rows can never come apart (the MUI DataGrid drew them
+    // as two grids kept in step by its own measuring and scrolling, which broke in production). When the table is wider
+    // than the screen it scrolls sideways in its own box, and the name ("שם" = first + last) stays in view (sticky).
+    const P = translations.UserProfile;
+    const ariaSort = (column: string): React.AriaAttributes['aria-sort'] =>
+        sortConfig.field === column ? (sortConfig.sort === 'asc' ? 'ascending' : 'descending') : undefined;
     return (
-        <div dir='rtl'>
-            <Paper sx={{ height: 600, width: '100%' }}>
-            <ThemeProvider theme={theme}>
-                <DataGrid
-                    rows={rows}
-                    columns={columns}
-                    disableColumnMenu={true}
-                    sortingMode="server"
-                    paginationMode="server"
-                    paginationModel={paginationModel}
-                    rowCount={totalUsers} // Total number of jobs for pagination
-                    onPaginationModelChange={(newPaginationModel) => {
-                        const { page, pageSize } = newPaginationModel;
-                        handlePaginationChange(page, pageSize);
-                    }}
-                    localeText={{
-                        // Pagination and other text in Hebrew
-                        MuiTablePagination: {
-                            labelRowsPerPage: 'שורות לעמוד:',
-                            labelDisplayedRows: ({ from, to, count }) =>
-                                `${from}-${to} מתוך ${count !== -1 ? count : `יותר מ ${to}`}`,
-                        },
-                        // General DataGrid translations
-                        noRowsLabel: 'אין נתונים להצגה',
-                        columnMenuLabel: 'תפריט עמודה',
-                        columnMenuSortAsc: 'מיון בסדר עולה',
-                        columnMenuSortDesc: 'מיון בסדר יורד',
-                        columnMenuFilter: 'סינון',
-                        columnMenuHideColumn: 'הסתר עמודה',
-                        columnMenuShowColumns: 'הצג עמודות',
-                        footerRowSelected: (count) => `${count} שורות נבחרו`,
-                    }}
-                    sx={dataGridStyle}
-                />
-                </ThemeProvider>
-            </Paper>
+        <div dir='rtl' className="users-table">
+            <div className="users-table__scroll" tabIndex={0} role="region" aria-label={P.Users}>
+                <table className="users-table__table">
+                    <thead>
+                        <tr>
+                            <th scope="col" className="users-table__name" aria-sort={ariaSort('firstName')}>{sortHeader('firstName', 'שם')}</th>
+                            <th scope="col" aria-sort={ariaSort('location')}>{sortHeader('location', P.Location)}</th>
+                            <th scope="col" aria-sort={ariaSort('dateOfBirth')}>{sortHeader('dateOfBirth', P.DateOfBirth)}</th>
+                            <th scope="col">{P.Gender}</th>
+                            <th scope="col" className="users-table__icon">{P.Skills}</th>
+                            <th scope="col" aria-sort={ariaSort('email')}>{sortHeader('email', P.Email)}</th>
+                            <th scope="col" aria-sort={ariaSort('phoneNumber')}>{sortHeader('phoneNumber', P.PhoneNumber)}</th>
+                            <th scope="col">{translations.Register.IdNumber}</th>
+                            <th scope="col">דיוור שיווקי</th>
+                            <th scope="col" className="users-table__icon">פרטים נוספים</th>
+                            <th scope="col" className="users-table__icon">{P.JobApplications}</th>
+                            <th scope="col" className="users-table__icon">{P.Cv}</th>
+                            <th scope="col">{P.Role}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows.length === 0 && (
+                            <tr><td colSpan={12} className="users-table__empty">אין נתונים להצגה</td></tr>
+                        )}
+                        {rows.map((row) => {
+                            const name = [row.firstName, row.lastName].filter(Boolean).join(' ');
+                            const hasSkills = !!(row.skills && row.skills.length > 0);
+                            const hasApplications = !!(row.jobApplicationsToDisplay && Object.keys(row.jobApplicationsToDisplay).length > 0);
+                            return (
+                                <tr key={row._id}>
+                                    <th scope="row" className="users-table__name">{name}</th>
+                                    <td title={row.location ?? ''}><span className="users-table__clip users-table__city">{row.location}</span></td>
+                                    <td>{row.dateOfBirth ? formatDate(row.dateOfBirth as any) : ''}</td>
+                                    <td>{translations.UserProfile[row.gender as keyof typeof translations.UserProfile]}</td>
+                                    <td className="users-table__icon">
+                                        {hasSkills && (
+                                            <button type="button" className="btn" aria-label={`${P.Skills}: ${name}`}
+                                                onClick={() => openUserSkillsModal(row.requiredSkillsDetails as keyValue[])}>
+                                                <i className="bi bi-person-vcard" aria-hidden="true"></i>
+                                            </button>
+                                        )}
+                                    </td>
+                                    <td title={row.email}><span dir="ltr" className="users-table__clip users-table__email">{row.email}</span></td>
+                                    <td><span dir="ltr">{row.phoneNumber}</span></td>
+                                    <td><span dir="ltr">{row.idNumber || '—'}</span></td>
+                                    <td><MarketingStatus id={row._id} name={name} value={(row as any).marketing} readOnly={readOnly} onChanged={onChanged} /></td>
+                                    <td className="users-table__icon">
+                                        {row.extraDetails.length > 0 && (
+                                            <button type="button" className="btn" aria-label={`פרטים נוספים: ${name}`}
+                                                onClick={() => openExtraDetailsModal(name, row.extraDetails)}>
+                                                <i className="bi bi-list-ul" aria-hidden="true"></i>
+                                            </button>
+                                        )}
+                                    </td>
+                                    <td className="users-table__icon">
+                                        {hasApplications && (
+                                            <button type="button" className="btn" aria-label={`${P.JobApplications}: ${name}`}
+                                                onClick={() => openJobApplicationsModal(row)}>
+                                                <ArchiveIcon />
+                                            </button>
+                                        )}
+                                    </td>
+                                    <td className="users-table__icon">
+                                        {row.cvFileUrl ? (
+                                            <span className="users-table__cv">
+                                                <button type="button" className="btn" aria-label={`${P.Cv}: ${name}`} onClick={() => previewFile(row._id as string)}>
+                                                    <EyeIcon />
+                                                </button>
+                                                {!readOnly && (
+                                                    <button type="button" className="btn" aria-label={`${translations.Cv.DeleteCvTitle}: ${name}`}
+                                                        onClick={() => deleteCvModal(row.cvFileUrl as string, row._id as string, row.id)}>
+                                                        <TrashIcon />
+                                                    </button>
+                                                )}
+                                            </span>
+                                        ) : null}
+                                    </td>
+                                    <td>{ROLE_LABELS[row.role as string] ?? row.role}</td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+            {pager}
         </div>
     );
 };
