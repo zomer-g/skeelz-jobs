@@ -17,6 +17,7 @@ import ConsentChecks, { ConsentValues } from '../consent/ConsentChecks';
 import MarketingConsentToggle from '../consent/MarketingConsentToggle';
 import { SignupFields, loadSignupFields } from '../../utils/signupFields';
 import { FormField, loadSignupCustomFields, valuesToSend } from '../../utils/customFields';
+import { lastApiErrorCode } from '../../utils/lastApiError';
 
 /**
  * email-signup after a right code by email for a new address ("קבלת קוד למייל"): email read-only (the verified
@@ -54,6 +55,15 @@ const RegisterUser: React.FC<{ onSuccess: () => void; mode?: RegisterMode; prefi
     const isSignUp = mode === 'email-signup' || mode === 'sso-signup' || mode === 'add-candidate';
     const [consent, setConsent] = useState<ConsentValues>({ consent: false, marketingConsent: false });
     const [consentError, setConsentError] = useState(false);
+    // A refusal from the server, said next to the button (role="alert"), not in a toast.
+    const [submitError, setSubmitError] = useState('');
+    const errorRef = useRef<HTMLDivElement>(null);
+    const fail = (text: string) => {
+        setBlockButton(false);
+        // A candidate role an admin blocked on this account is never added back (server 403 role_blocked).
+        setSubmitError(lastApiErrorCode() === 'role_blocked' ? translations.ApplyFlow.BlockedText : text);
+        setTimeout(() => errorRef.current?.focus(), 0);
+    };
     useEffect(() => { if (isSignUp) track('sign_up_start', applyContextParams()); }, []);
     // Which fields are required / optional / hidden (admins' setting; the server checks the same).
     const [fields, setFields] = useState<SignupFields | null>(null);
@@ -95,6 +105,7 @@ const RegisterUser: React.FC<{ onSuccess: () => void; mode?: RegisterMode; prefi
     };
 
     const handleFinalSubmit = async () => {
+        setSubmitError('');
         if (isSignUp && !consent.consent) {
             setConsentError(true);
             setBlockButton(false);
@@ -106,7 +117,7 @@ const RegisterUser: React.FC<{ onSuccess: () => void; mode?: RegisterMode; prefi
             const r = mode === 'sso-signup'
                 ? await LoginService.getInstance().completeSsoSignup(values)
                 : await LoginService.getInstance().completeEmailSignup(values);
-            if (isString(r)) { setBlockButton(false); showToast(r, 'error'); return; }
+            if (isString(r)) { fail(r); return; }
             setUser({ ...r.user, jobApplicationsId: r.jobApplicationsId } as any);
             track('sign_up', { method: mode === 'sso-signup' ? ssoSignUpMethod() : 'email_code', ...applyContextParams() });
             clearApplyContext();
@@ -114,8 +125,9 @@ const RegisterUser: React.FC<{ onSuccess: () => void; mode?: RegisterMode; prefi
             return;
         }
         if (mode === 'add-candidate') {
-            const r = await UserService.getInstance().addMyRole('candidate', { ...profileFields(userData, fields!, false), ...consent });
-            if (isString(r)) { setBlockButton(false); showToast(r, 'error'); return; }
+            // The added sign-up questions too (the server asks for the required ones, like every sign-up).
+            const r = await UserService.getInstance().addMyRole('candidate', { ...profileFields(userData, fields!, false, customFields ?? []), ...consent });
+            if (isString(r)) { fail(r); return; }
             // The session now carries the candidate role too: read it again.
             const s = await LoginService.getInstance().getSession();
             if (s && !isString(s)) setUser({ ...s.user, jobApplicationsId: s.jobApplicationsId } as any);
@@ -124,7 +136,7 @@ const RegisterUser: React.FC<{ onSuccess: () => void; mode?: RegisterMode; prefi
         }
         if (mode === 'complete' || mode === 'edit') {
             const r = await UserService.getInstance().updateMe(profileFields(userData, fields!, true, customFields ?? []));
-            if (isString(r)) { setBlockButton(false); showToast(r, 'error'); return; }
+            if (isString(r)) { fail(r); return; }
             const current = useAuthStore.getState().user;
             setUser({ ...(current ?? {}), ...r.user } as any);
             showToast(tp.Saved, 'success');
@@ -177,6 +189,11 @@ const RegisterUser: React.FC<{ onSuccess: () => void; mode?: RegisterMode; prefi
                     </>
                 )}
             </div>
+            {submitError && (
+                <div ref={errorRef} tabIndex={-1} role="alert" className="apply-note apply-note-stop mx-4 mb-3" data-testid="register-error">
+                    {submitError}
+                </div>
+            )}
             <div className={`text-start bg-light position-sticky bottom-0 w-100 border-top border-dark border-radius-b-40 py-2 px-3 height-5-625rem d-flex ${step === 2 ? 'justify-content-between' : 'justify-content-end'}`} >
                 {step === 2 && <Button
                     className='font-RubikMedium bg-white mt-3 ms-1 px-5 py-2 fs-6 text-color-dark-green-2 border-color-dark-green-2 rounded-pill text-center'

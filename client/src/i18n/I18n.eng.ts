@@ -845,7 +845,7 @@ export enum Terms {
     SignInConfirm = 'Accept and continue',
     SignInLater = 'Not now',
     SignInSaved = 'Saved',
-    SignInDeclined = 'You are still signed in. Without accepting the terms you cannot apply; we will ask again when you apply.',
+    SignInDeclined = 'You can choose "Not now" and stay signed in. Without accepting the terms you cannot apply; we will ask again when you apply.',
     SignInFailed = 'Not saved. Please try again.',
 }
 
@@ -935,7 +935,7 @@ export enum Employers {
     Claimed = 'The jobs were added to your account',
     Loading = 'Loading…',
     LoadError = 'Loading failed. Please try again.',
-    CannotApply = "To apply, join as a candidate too. You can do it on this same account, from the menu (Also join as a candidate).",
+    CannotApply = "Applying needs a candidate's details. Press \"Apply\" on the job, fill them in in the same window and go on applying.",
     PostSignInTitle = 'Posting a job needs an employer account',
     PostSignInText = 'To post a job, sign in with an employer account. Signing up is free: continue with Google, Microsoft or a code by email.',
     PostSignInButton = 'Sign in or sign up as an employer',
@@ -1029,4 +1029,20 @@ export enum Threshold {
     NotConfirmed = 'Not applied: please confirm the job\'s threshold condition.',
     OnJobPage = 'Threshold condition',
     None = 'None',
+}
+
+// Applying: sign in → straight back to applying, and the candidate details step inside the dialog (owner, 24.11.2026).
+export enum ApplyFlow {
+    SignInTitle = 'Sign in to apply',
+    SignInIntro = 'To apply for this job, sign in to your account. No account yet? Sign up the same way. Right after that we will go back to your application.',
+    SignInToApplyNote = 'Applications to this job go through an account on the site. Press "Apply", sign in or sign up, and go straight on to applying.',
+    CandidateStepTitle = 'One more step before applying',
+    CandidateStepIntro = 'Applying needs a candidate\'s details. It is the same account and the same sign-in. Once you fill them in and agree, we go straight on to this application.',
+    ModalTitle = 'Apply',
+    BlockedTitle = 'This account cannot apply',
+    BlockedText = 'Applying is blocked on this account. If you think this is a mistake, please contact the SKEELZ team.',
+    Close = 'Close',
+    SignInFailedTitle = 'Signing in did not work',
+    TryAgain = 'You can try again with one of the options here.',
+    SubmitFailed = 'We could not save. ',
 }

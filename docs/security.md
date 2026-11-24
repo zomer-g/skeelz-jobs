@@ -41,6 +41,19 @@ role). At most one staff role per account (`users_roles_check`). Each role keeps
   from inside their account (`POST /api/users/me/roles/candidate | employer`, gate `anyAccount`, used nowhere else):
   the usual form and consent (a `consent_records` row in the same statement, source `candidate_role_added` /
   `employer_role_added`), logged `auth.role_added` (the role only). No route adds a staff role to oneself.
+- **Every signed-in person is a candidate** (owner, 24.11.2026: "מבחינתי כל אדם מחובר הוא מועמד"). Decided: the
+  candidate role is NOT added silently at sign-in (it brings new data — details, CV, applications — and the candidate's
+  consent). It is added when the person applies: an account without it (an employer only, a staff member on Google)
+  pressing "הגש מועמדות" gets the candidate details step INSIDE the apply dialog (`jobcard/CandidateStep.tsx`: the
+  sign-up form with the sign-up fields setting and the added questions, prefilled from the account, and the consent
+  boxes → `POST /users/me/roles/candidate`, same checks, `consent_records` row, `auth.role_added`), then goes straight on
+  to the CV dialog. `/join/candidate` stays for doing it without a job.
+- **Only the candidate role applies** (`POST /jobs/apply/:jobId`): the gate `signedIn` also admits staff, so the handler
+  refuses a session without a usable candidate role first, before anything is read or stored: 403 `candidate_role_needed`
+  (`access.denied`, reason `candidate_role_needed`), or `role_blocked` when an admin blocked it. This refusal does not
+  sign the person out (it is not a gate), so the dialog goes on with the candidate step on the same session.
+- A blocked candidate role: the apply dialog says so in place (`BlockedCandidateNote`, from `user.blockedRoles` of the
+  person's own session), never offers the candidate step, and the server refuses both the application and the role.
 - A **legacy mirror** candidate (read-only until the cutover) may get other roles; it must keep the candidate role
   (`users_legacy_guard`).
 - Deactivation stays per account (all its roles). To stop ONE role, block it (below).

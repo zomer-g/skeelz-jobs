@@ -64,7 +64,7 @@ const SignInConsentDialog: React.FC = () => {
   const later = () => {
     setLater(userId);
     setNeed(null);
-    showToast(t.SignInDeclined, 'warning');
+    // What "not now" means is said in the dialog itself (below the boxes), not in an orange toast after it closed.
   };
   const confirm = async () => {
     if (!values.consent) { setError(true); document.getElementById('signin-consent-consent')?.focus(); return; }
@@ -89,6 +89,7 @@ const SignInConsentDialog: React.FC = () => {
         <ConsentChecks idPrefix="signin-consent" audience="candidate" values={values} disabled={saving}
           onChange={(v) => { setValues(v); if (v.consent) setError(false); }}
           showTerms showMarketing={need.marketing} termsError={error} />
+        <p className="font-RubikRegular small text-muted mt-3 mb-0">{t.SignInDeclined}</p>
         {failed && <p className="text-danger small mt-2 mb-0" role="alert">{t.SignInFailed}</p>}
       </Modal.Body>
       <Modal.Footer>

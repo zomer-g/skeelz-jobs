@@ -37,6 +37,14 @@ One Node process: Express API (`server/`) + built React client (`client/dist`). 
   when a coordinator or content manager approves (a threshold condition or an apply setting: a content manager). Several roles per account (owner, 23.11.2026): a person adds the employer / candidate role to their own account
   (`POST /users/me/roles/employer|candidate`, gate `anyAccount`, used nowhere else); only an admin adds a staff role.
   Each role keeps its own gate, hand-overs and limits; the employer budgets belong to the account (`user:<id>`).
+- **Every signed-in person is a candidate** (owner, 24.11.2026; `docs/security.md`): the candidate role is added when they
+  apply, never silently — "הגש מועמדות" on an account without it opens the candidate step INSIDE the apply dialog (the
+  sign-up form + consent → `POST /users/me/roles/candidate`), then the application goes on. Only a usable candidate role
+  applies: `POST /jobs/apply` refuses any other session first (403 `candidate_role_needed` / `role_blocked`).
+- **Apply flow: no toasts** (owner, 24.11.2026; `docs/jobs-management.md` "Ways to apply"). A signed-out visitor on a job
+  without quick application signs in and lands straight on that job's apply step (`utils/applyIntent.ts`: job id only,
+  same-site `/job/<id>` only). Refusals and errors are said in place, inside the dialog next to the button
+  (`role="alert"`, `.apply-note`), never in an orange corner toast.
 - **Roles come from the DB, never from the token.** Read `req.authUser.role` / `req.authUser.roles` /
   `req.authJwtPayload.userRole` (all set from the DB by the middleware). Don't decode JWTs yourself.
 - **Several roles per account** (owner, 23.11.2026; `docs/security.md`). `users.roles` is the set and the source of
@@ -121,7 +129,9 @@ One Node process: Express API (`server/`) + built React client (`client/dist`). 
   + employer (own account) → + content manager (admin); staff powers only on Google (a code session is candidate +
   employer only); staff views through the hand-over by email; employer sees only forwarded applicants, one employer
   budget per account on every session; removing staff keeps the rest; employer-only → + candidate; staff-only still
-  Google-only (12 checks; fresh DB; restart the server first — it spends 1 of the per-IP submissions).
+  Google-only; staff-only refused on apply (`candidate_role_needed`, nothing stored) → + candidate on the same Google session →
+  applies; Google comes back to `/job/<id>`; a blocked candidate role → `role_blocked` (13 checks; fresh DB; restart the
+  server first — it spends 1 of the per-IP submissions).
 - `BASE=http://localhost:3100 DATABASE_URL=… node test/e2e-role-blocks.mjs` — blocking a role and employers editing every
   field (owner, 24.11.2026): admins only (others refused, bad input), find any account by email (roles + blocks only),
   a block closes every session and the person signs in again with the open roles (code / Google), a blocked role not

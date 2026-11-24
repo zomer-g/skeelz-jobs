@@ -5,6 +5,7 @@ import useAuthStore from '../store/Auth.store';
 import useToastStore from '../store/Toast.store';
 import { i18n } from '../i18n/I18n';
 import { applyContextParams, parseVia, setSsoMethod, track } from './analytics';
+import { hasApplyIntent, resumeApplyIntent } from './applyIntent';
 
 
 const ERROR_TEXT = (code: string): string => {
@@ -27,7 +28,7 @@ const ERROR_TEXT = (code: string): string => {
  * required details are missing, `onIncomplete` (the "complete your details" form). signup: a new Google identity
  * → `onSignup` (the sign-up form; nothing exists yet). An error: say why. The parameter is then removed.
  */
-export const useSignInReturn = (handlers: { onSignup?: () => void; onIncomplete?: () => void } = {}) => {
+export const useSignInReturn = (handlers: { onSignup?: () => void; onIncomplete?: () => void; onError?: (text: string) => void } = {}) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { setUser } = useAuthStore();
@@ -53,7 +54,8 @@ export const useSignInReturn = (handlers: { onSignup?: () => void; onIncomplete?
     navigate({ pathname: location.pathname, search: rest ? `?${rest}` : '', hash: location.hash }, { replace: true });
 
     if (error) {
-      showToast(ERROR_TEXT(error), 'error');
+      // Said in the sign-in window (Header), with the ways to try again; a toast only where there is no window.
+      if (handlers.onError) handlers.onError(ERROR_TEXT(error)); else showToast(ERROR_TEXT(error), 'error');
       return;
     }
     if (signup) {
@@ -65,9 +67,15 @@ export const useSignInReturn = (handlers: { onSignup?: () => void; onIncomplete?
       if (r && typeof r !== 'string' && r.user) {
         setUser({ ...r.user, jobApplicationsId: r.jobApplicationsId } as any);
         track('login', { method: via, ...applyContextParams() });
-        showToast(passwordCleared ? i18n.getTranslations().SignIn[notice === 'password_cleared_ms' ? 'PasswordClearedMicrosoft' : 'PasswordCleared'] : i18n.getTranslations().SignIn.SignedIn,
-          passwordCleared ? 'warning' : 'success');
+        const applying = hasApplyIntent();
+        // A one-time notice (an old password was removed) stays; "signed in" is not said on top of an application.
+        if (passwordCleared) showToast(i18n.getTranslations().SignIn[notice === 'password_cleared_ms' ? 'PasswordClearedMicrosoft' : 'PasswordCleared'], 'info');
+        else if (!applying) showToast(i18n.getTranslations().SignIn.SignedIn, 'success');
+        // Missing details: that form first (it goes on with the application when saved); else straight back to applying.
         if ((r as any).profileIncomplete) handlers.onIncomplete?.();
+        else resumeApplyIntent();
+      } else if (handlers.onError) {
+        handlers.onError(ERROR_TEXT('failed'));
       } else {
         showToast(ERROR_TEXT('failed'), 'error');
       }

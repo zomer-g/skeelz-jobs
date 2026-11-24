@@ -3382,3 +3382,14 @@ thead .users-table__name { z-index: 3; }
 @media (prefers-reduced-motion: reduce) {
   .not-found__primary, .not-found__secondary, .not-found__job { transition: none; }
 }
+
+/* ---- In-place notes of the apply flow (owner, 24.11.2026: no orange toasts in a corner) ----
+   apply-note-info: what to do next (purple, like the threshold note); apply-note-stop: something did not go through.
+   Text colours pass WCAG AA on their backgrounds. */
+.apply-note {
+  border-radius: 12px; padding: 0.75rem 1rem; font-size: 1rem; line-height: 1.5;
+  border-inline-start: 4px solid; white-space: normal; text-align: start;
+}
+.apply-note:focus { outline: 2px solid #3d2a8c; outline-offset: 2px; }
+.apply-note-info { background: #f4f2ff; border-color: #5b47c9; color: #2b2259; }
+.apply-note-stop { background: #fdf0f3; border-color: #b4213f; color: #5c0f20; }

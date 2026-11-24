@@ -1,5 +1,5 @@
 import { applyFlow, apiErrorCode } from '../../utils/analytics';
-import { RequestEnum, isCandidateUser, isEmployerUser } from '../../i18n/General.enums';
+import { RequestEnum, isCandidateUser } from '../../i18n/General.enums';
 import { Routes } from '../../i18n/Routes.enum';
 import { ActiveJobsResponse, ApplyCvChoice, NearbyJobsResponse, ApplyJobResponse, CreateJobResponse, GetAllJobsResponse, GuestApplyJobResponse } from '../../models/interfaces/Api.interfaces';
 import { Guest, JobData } from '../../models/interfaces/Props.interfaces';
@@ -148,10 +148,10 @@ export class JobService {
     async applyJob(jobId: string, cv?: ApplyCvChoice, knownThreshold?: string | null): Promise<ApplyJobResponse | string> {
         // Analytics: a path that applies without the funnel having started still gets a flow (fills in the rest).
         applyFlow.ensure({ job_id: jobId, apply_type: 'registered', apply_mode: 'regular' });
-        // An employer-only account never applies (the server refuses it and closes the session); someone who is also a
-        // candidate applies as that candidate (several roles per account, 23.11.2026).
+        // Only the candidate role applies (the server refuses any other: 403 candidate_role_needed). The apply buttons
+        // add the role first, in the dialog (CandidateStep); someone who is also a candidate applies as that candidate.
         const who = useAuthStore.getState().user;
-        if (!isCandidateUser(who) && isEmployerUser(who)) {
+        if (!isCandidateUser(who)) {
             applyFlow.fail('employer_account', jobId);
             return i18n.getTranslations().Employers.CannotApply;
         }

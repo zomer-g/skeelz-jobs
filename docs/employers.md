@@ -54,7 +54,9 @@ optional job title, the two consent boxes from `security/consent.ts`. The employ
   person adds the employer role from inside it: `/join/employer` (also linked from `/post-job` and the personal area) →
   `POST /api/users/me/roles/employer` with the same form and consent (logged `auth.role_added`). Same email, same sign-in.
   The reverse: an employer adds the candidate role at `/join/candidate` (`POST /api/users/me/roles/candidate`, the
-  candidate sign-up fields and consent).
+  candidate sign-up fields and consent), or simply by pressing "הגש מועמדות" on a job: the same form and consent open
+  inside the apply dialog and the application goes on right after (owner, 24.11.2026: every signed-in person is a
+  candidate; `docs/security.md`). An employer-only session never reaches the apply route (it would be refused).
 - No sign-up path turns an existing address into an employer by itself: the sign-up form is only for new addresses.
 - **Staff** who are also employers: the staff role counts only on a Google session; by code or Microsoft they are the
   employer (and candidate) only. A staff-only address still signs in only with Google (`staff_google_only`).

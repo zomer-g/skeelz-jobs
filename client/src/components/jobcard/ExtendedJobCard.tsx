@@ -8,7 +8,6 @@ import JobInfo from "./JobInfo";
 import { GuestApplyModal } from "../GuestApplyModal";
 import { JobService } from "../../services/api/Job.service";
 import useAuthStore from "../../store/Auth.store";
-import ToastStore from "../../store/Toast.store";
 import useModalStore from "../../store/Modal.store";
 import Button from "../common/Button";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
@@ -36,8 +35,9 @@ export const ExtendedJobCard = forwardRef<FormHandle, JobCardDataProps>(({ jobDa
     const translations = i18n.getTranslations();
     const {setUserTryToApply,user,setOpenLogin} = useAuthStore();
     const { initModal } = useModalStore();
-    const { showToast } = ToastStore();
     const [isLoading,setIsLoading] = useState(false)
+    // A refused quick application, said above the form (role="alert"), not in a toast.
+    const [guestError, setGuestError] = useState('')
     const isMobile = useIsMobile();
     const bottomRef = useRef<HTMLDivElement | null>(null);
     const innerRef = useRef<FormHandle>(null); // ref for GuestApplyModal
@@ -71,6 +71,7 @@ export const ExtendedJobCard = forwardRef<FormHandle, JobCardDataProps>(({ jobDa
             applyFlow.set({ cv_choice: data.cvFilePath ? 'job_only' : 'none' }, jobKey);
             applyFlow.step('apply_cv_choice', 'cv_choice', {}, jobKey);
         }
+        setGuestError('')
         setIsLoading(true)
         const result = await JobService.getInstance().guestApplyJob(jobData,data);
         setIsLoading(false)
@@ -81,7 +82,7 @@ export const ExtendedJobCard = forwardRef<FormHandle, JobCardDataProps>(({ jobDa
                 setUserTryToApply(true)
                 setOpenLogin(true)
             }else{
-                showToast(applyErrorText(result, translations.ApplyCv.ApplyFailed), "error");
+                setGuestError(applyErrorText(result, translations.ApplyCv.ApplyFailed));
             }
             return;
         } else{
@@ -210,6 +211,7 @@ export const ExtendedJobCard = forwardRef<FormHandle, JobCardDataProps>(({ jobDa
                       <hr className="w-10 my-4 d-block d-sm-none" />
                      {/*mobile */}
                  {isMobile && <div ref={bottomRef} className="mt-5 mb-3 max-width-33rem d-block d-sm-none">
+                        {guestError && <div role="alert" className="apply-note apply-note-stop mb-3" data-testid="guest-apply-error">{guestError}</div>}
                         <GuestApplyModal
                             handleGuestApply={async (cvFilePath) => handleGuestApplyJob(cvFilePath)}
                             cvRequired={cvRequired}
@@ -224,6 +226,7 @@ export const ExtendedJobCard = forwardRef<FormHandle, JobCardDataProps>(({ jobDa
                 <div className="col-md-6 order-md-1 d-flex align-items-start justify-content-start d-none d-sm-block px-2">
                     <div className="border-end h-100">
                         <div className="max-width-33rem ">
+                           {!isMobile && guestError && <div role="alert" className="apply-note apply-note-stop mb-3 mx-2" data-testid="guest-apply-error">{guestError}</div>}
                            { !isMobile && <GuestApplyModal
                                 handleGuestApply={async (cvFilePath) => handleGuestApplyJob(cvFilePath) }
                                 cvRequired={cvRequired}
@@ -240,8 +243,8 @@ export const ExtendedJobCard = forwardRef<FormHandle, JobCardDataProps>(({ jobDa
             </div>
         ) : (
              <div className="row pt-2 pe-3">
-                {!user && applyPolicy.guestMode === 'none' && (
-                    <p className="font-RubikMedium text-color-purple">{translations.ApplyPolicy.RegisterToApply}</p>
+                {!user && applyPolicy.guestMode === 'none' && !jobData.onExistingSite && (
+                    <p className="apply-note apply-note-info font-RubikRegular" data-testid="sign-in-to-apply-note">{translations.ApplyFlow.SignInToApplyNote}</p>
                 )}
                 {isSelfApply && (
                     <section className="self-apply-box mb-3" aria-labelledby={`self-apply-${jobKey}`}>

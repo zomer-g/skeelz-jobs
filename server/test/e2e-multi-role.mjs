@@ -278,6 +278,45 @@ await check('employer-only → + candidate from inside the account (sign-up fiel
   assert.equal((await empE.req('POST', '/api/users/me/roles/candidate', candidateBody(E, 'אלה', 'מעסיקה'))).json?.code, 'role_already_held');
 });
 
+// Owner, 24.11.2026: "every signed-in person is a candidate" — the site adds the role inside the apply dialog
+// (candidate details + consent), never silently; only the candidate role applies; a blocked one is never added back.
+await check('apply needs the candidate role: staff-only refused (nothing stored) → + candidate on the same session → applies; Google comes back to the job; blocked → role_blocked', async () => {
+  const S = `multi-s-${stamp}@example.test`;
+  const add = await sec.req('POST', '/api/admin/staff', { email: S, role: 'placement_coordinator', firstName: 'רכזת', lastName: 'מגישה' });
+  assert.equal(add.status, 200, add.text);
+  const s = jar();
+  // The return path of "Continue with Google" from the apply button: the job page (same-site path, kept by the server).
+  const back = await xhostdSignIn(s, S, { returnTo: `/job/${jobId}` });
+  assert.ok(signedInOk(back), back.headers.get('location'));
+  assert.ok(back.headers.get('location').startsWith(`/job/${jobId}?`), back.headers.get('location'));
+  const sId = (await session(s)).id ?? (await session(s))._id;
+  const before = (await db.query(`SELECT count(*)::int AS n FROM job_applications WHERE user_id = $1`, [sId])).rows[0].n;
+  const no = await s.req('POST', `/api/jobs/apply/${jobId}`, { cv: { mode: 'profile' } });
+  assert.equal(no.status, 403, no.text);
+  assert.equal(no.json.code, 'candidate_role_needed');
+  assert.equal((await db.query(`SELECT count(*)::int AS n FROM job_applications WHERE user_id = $1`, [sId])).rows[0].n, before, 'nothing stored');
+  assert.equal((await db.query(`SELECT count(*)::int AS n FROM consent_records WHERE subject_id = $1`, [sId])).rows[0].n, 0, 'no consent stored');
+  // The refusal did not sign the person out: the dialog goes on with the candidate step on the same session.
+  const join = await s.req('POST', '/api/users/me/roles/candidate', candidateBody(S, 'רכזת', 'מגישה'));
+  assert.equal(join.status, 200, join.text);
+  assert.deepEqual(await rolesOf(sId), ['placement_coordinator', 'user']);
+  assert.equal((await db.query(`SELECT 1 FROM consent_records WHERE subject_id = $1 AND source = 'candidate_role_added'`, [sId])).rowCount, 1);
+  const t = crypto.randomUUID();
+  assert.equal((await upload(s, t, 's.pdf')).status, 200);
+  const ok = await s.req('POST', `/api/jobs/apply/${jobId}`, { cv: { mode: 'jobOnly', cvFilePath: `${t}/s.pdf` } });
+  assert.equal(ok.status, 200, ok.text);
+  // An admin blocks the candidate role: no application, and the role is not added back.
+  assert.equal((await sec.req('PUT', `/api/admin/role-blocks/${sId}/user`, { blocked: true })).status, 200);
+  assert.ok(signedInOk(await xhostdSignIn(s, S)), 'staff still signs in (the staff role is open)');
+  const b = await s.req('POST', `/api/jobs/apply/${jobId}`, { cv: { mode: 'profile' } });
+  assert.equal(b.status, 403, b.text);
+  assert.equal(b.json.code, 'role_blocked');
+  assert.deepEqual((await session(s)).blockedRoles, ['user'], 'the client knows, to say so in place');
+  assert.equal((await s.req('POST', '/api/users/me/roles/candidate', candidateBody(S, 'רכזת', 'מגישה'))).json?.code, 'role_blocked');
+  const denied = await audit('access.denied', `AND actor = '${S}'`);
+  assert.ok(denied.some((d) => d.details?.reason === 'candidate_role_needed'), 'the refusal is logged');
+});
+
 await check('a staff-only account still signs in only with Google (no code)', async () => {
   const r = await jar().req('POST', '/api/dev/email-code', { email: CM_EMAIL });
   assert.equal(r.status, 403, r.text);

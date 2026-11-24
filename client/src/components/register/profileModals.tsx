@@ -9,6 +9,7 @@ import { i18n } from '../../i18n/I18n';
 import { Gender } from '../../i18n/General.enums';
 import { RegisterFormValues } from '../../models/interfaces/Props.interfaces';
 import { isString } from '../../utils/utils';
+import { clearApplyIntent, resumeApplyIntent } from '../../utils/applyIntent';
 
 /** The candidate's stored record → the form's values (no password; CV only as "you have one"). */
 const fromUser = (u: any): Partial<RegisterFormValues> => ({
@@ -32,10 +33,19 @@ const fromUser = (u: any): Partial<RegisterFormValues> => ({
  *   openComplete   a signed-in candidate whose required details are missing
  *   openEdit       the personal area ("My details")
  */
-export const useProfileModals = () => {
+export const useProfileModals = (opts: { onExpired?: (text: string) => void } = {}) => {
   const { initModal, closeModal } = useModalStore();
   const { showToast } = useToastStore();
   const t = () => i18n.getTranslations();
+  // A sign-up that took too long: back to the sign-in window, saying so (Header), not a toast.
+  const expired = (text: string) => (opts.onExpired ? opts.onExpired(text) : showToast(text, 'error'));
+  // Signed up / details completed: an application that was waiting for this goes on now (utils/applyIntent.ts);
+  // otherwise the usual "saved" note.
+  const done = (doneText?: string) => {
+    closeModal();
+    if (resumeApplyIntent()) return;
+    if (doneText) showToast(doneText, 'success');
+  };
 
   const open = (mode: RegisterMode, title: string, prefill: Partial<RegisterFormValues>, hasCv: boolean, doneText?: string) =>
     initModal({
@@ -46,8 +56,9 @@ export const useProfileModals = () => {
         <SignUpChooser
           mode={mode}
           prefill={prefill}
-          onCandidateDone={() => { closeModal(); if (doneText) showToast(doneText, 'success'); }}
+          onCandidateDone={() => done(doneText)}
           onEmployerDone={() => {
+            clearApplyIntent(); // signed up as an employer: their area, not the application
             closeModal();
             showToast(t().Employers.SignedUp, 'success');
             // On /post-job the employer goes on to send the job; anywhere else, to their area.
@@ -59,7 +70,7 @@ export const useProfileModals = () => {
           mode={mode}
           prefill={prefill}
           hasCv={hasCv}
-          onSuccess={() => { closeModal(); if (doneText) showToast(doneText, 'success'); }}
+          onSuccess={() => (mode === 'complete' ? done(doneText) : (closeModal(), doneText && showToast(doneText, 'success')))}
         />
       ),
       modalStyle: { dialogClassName: 'max-width-72-06rem', bodyClass: 'p-0', titleClass: 'font-RubikBold fs-4' },
@@ -68,7 +79,7 @@ export const useProfileModals = () => {
   const openSsoSignup = async () => {
     const p = await LoginService.getInstance().getPendingSignup();
     if (!p || isString(p)) {
-      showToast(t().AuthErrorMessages.SSO_SIGNUP_EXPIRED, 'error');
+      expired(t().AuthErrorMessages.SSO_SIGNUP_EXPIRED);
       return;
     }
     open('sso-signup', t().Profile.SignUpTitle, { email: p.email, firstName: p.firstName, lastName: p.lastName }, false, t().Profile.SignedUp);
@@ -77,7 +88,7 @@ export const useProfileModals = () => {
   const openEmailSignup = async () => {
     const p = await LoginService.getInstance().getPendingEmailSignup();
     if (!p || isString(p)) {
-      showToast(t().AuthErrorMessages.EMAIL_SIGNUP_EXPIRED, 'error');
+      expired(t().AuthErrorMessages.EMAIL_SIGNUP_EXPIRED);
       return;
     }
     open('email-signup', t().Profile.SignUpTitle, { email: p.email }, false, t().Profile.SignedUp);

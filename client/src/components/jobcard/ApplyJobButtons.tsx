@@ -1,46 +1,53 @@
+import { useEffect, useRef } from "react";
 import { i18n } from "../../i18n/I18n";
 import { CheckContainedIcon } from "../../icons";
-import { ApplyJobButtonsProps, Guest } from "../../models/interfaces/Props.interfaces";
+import { ApplyJobButtonsProps } from "../../models/interfaces/Props.interfaces";
 import { ApplyJobResponse } from "../../models/interfaces/Api.interfaces";
 import useAuthStore from "../../store/Auth.store";
-import { isCandidateUser, isEmployerUser } from "../../i18n/General.enums";
+import { isCandidateUser } from "../../i18n/General.enums";
 import useModalStore from "../../store/Modal.store";
-import useToastStore from "../../store/Toast.store";
 import Button from "../common/Button";
 import { ApplyWithCvDialog } from "./ApplyWithCvDialog";
+import { BlockedCandidateNote, CandidateStep, isCandidateBlocked } from "./CandidateStep";
 import { applyFlow, setApplyContext, startGuestApply, track } from "../../utils/analytics";
+import { onApplyIntentReady, registerApplyButtons, saveApplyIntent, takeReadyIntent } from "../../utils/applyIntent";
 
 /*
  * Ways to apply (utils/applyPolicy.ts):
  *  - signed in: always the regular application (CV dialog; the job's regular-apply CV rule applies).
  *    On a self-apply job the employer's details stay one click away.
- *  - not signed in: self -> the employer's details (apply directly), quick -> the guest form, none -> sign in.
+ *    Every signed-in person is a candidate (owner, 24.11.2026): an account without the candidate role (an employer
+ *    only, a staff member) gets the candidate details step here in the dialog (CandidateStep) and goes on applying;
+ *    a candidate role an admin blocked gets a clear note here (BlockedCandidateNote). No toasts.
+ *  - not signed in: self -> the employer's details (apply directly), quick -> the guest form, none -> the sign-in
+ *    window; after signing in (any way, a new person's sign-up form included) the person comes straight back to
+ *    this job's apply step (utils/applyIntent.ts).
  */
 export const ApplyJobButtons: React.FC<ApplyJobButtonsProps> = ({jobId, applyPolicy, openDirectApplyModal,handleGuestApply, hasThreshold = false, onExistingSite = false}) => {
     const isSelfApply = applyPolicy.guestMode === 'self';
     const { initModal, storeCurrentModalAsPending } = useModalStore();
     const translations = i18n.getTranslations();
     const { user, setOpenLogin, updateJobApplication, setUser } = useAuthStore();
-    const { showToast } = useToastStore();
     const isAlreadyApplied = user?.jobApplicationsId?.some(application => application === jobId);
     // Called by ApplyWithCvDialog once the application was accepted.
     const handleApplied = (result: ApplyJobResponse) => {
         updateJobApplication(result.jobApplicationId);
+        const cvUpdated = !!result.profileCvFileUrl;
         if (result.profileCvFileUrl) {
             const current = useAuthStore.getState().user;
             if (current) setUser({ ...current, cvFileUrl: result.profileCvFileUrl });
-            showToast(translations.ApplyCv.ProfileCvUpdated, 'success');
         }
-        // If user is logged in, show the job application success modal
         initModal({
             active: true,
             modalBody: (
-                <div className='d-flex justify-content-center flex-column align-items-center text-center'>
+                <div className='d-flex justify-content-center flex-column align-items-center text-center' role="status" data-testid="apply-success">
                     <div className="my-2 d-flex justify-content-center align-items-center rounded-circle size-3-375rem background-color-green-mint border-color-green-sage border-width-0-5-rem border">
                         <CheckContainedIcon />
                     </div>
                     <h1 className='font-RubikBold py-3 m-0 fs-5'>{translations.JobApplicationModal.Title}</h1>
-                    <p className='font-RubikRegular text-color-dark-grey text- mb-4'>{translations.JobApplicationModal.ApplicationReceived}</p>
+                    <p className='font-RubikRegular text-color-dark-grey mb-2'>{translations.JobApplicationModal.ApplicationReceived}</p>
+                    {/* Was a toast: said here, with the confirmation. */}
+                    {cvUpdated && <p className='font-RubikRegular text-color-dark-grey mb-2'>{translations.ApplyCv.ProfileCvUpdated}</p>}
                     <Button
                         className='font-RubikMedium my-2 bg-color-dark-green-2 w-100 mb-4'
                         onClick={() => initModal({ active: false })}
@@ -50,30 +57,25 @@ export const ApplyJobButtons: React.FC<ApplyJobButtonsProps> = ({jobId, applyPol
                 </div>
             ),
             modalStyle: {
-                bodyClass: "height-16-375rem d-flex flex-column justify-content-center align-items-center",
+                bodyClass: "py-4 d-flex flex-column justify-content-center align-items-center",
                 dialogClassName: "max-width-25rem"
             }
         });
     };
 
-    const handleApplyJobClicked = async () => {
-        track('apply_click', { job_id: jobId, apply_type: user ? 'registered' : 'guest' });
-        if (!user) {
-            setApplyContext(jobId);
-            track('login_prompt', { job_id: jobId, source: 'apply' });
-            // Store the current modal as pending
-            storeCurrentModalAsPending();
-            // If user is not logged in, open the login modal
-            setOpenLogin(true);
-            return;
-        }
-        // An account without the candidate role (an employer only) can't apply (server: the candidate routes refuse it);
-        // say so instead. Someone who is a candidate too applies as that candidate (several roles per account).
-        if (!isCandidateUser(user) && isEmployerUser(user)) {
-            showToast(translations.Employers.CannotApply, 'warning');
-            return;
-        }
-        // Signed in: choose the CV for this application, then apply. The apply funnel starts here.
+    // Not signed in, and this job takes applications through an account only: the sign-in window. The job modal is
+    // kept aside (it comes back after an in-window sign-in) and the job is remembered for the redirect sign-ins.
+    const signInToApply = () => {
+        track('apply_click', { job_id: jobId, apply_type: 'guest' });
+        setApplyContext(jobId);
+        saveApplyIntent(jobId);
+        track('login_prompt', { job_id: jobId, source: 'apply' });
+        storeCurrentModalAsPending();
+        setOpenLogin(true);
+    };
+
+    // The CV dialog: the regular application. The apply funnel starts here.
+    const openCvDialog = () => {
         applyFlow.start({ job_id: jobId, apply_type: 'registered', apply_mode: 'regular', cv_required: applyPolicy.regularCv === 'required', has_threshold: hasThreshold });
         initModal({
             active: true,
@@ -91,6 +93,42 @@ export const ApplyJobButtons: React.FC<ApplyJobButtonsProps> = ({jobId, applyPol
             }
         });
     };
+
+    const handleApplyJobClicked = () => {
+        const who = useAuthStore.getState().user;
+        if (!who) { signInToApply(); return; }
+        if (isCandidateUser(who)) { openCvDialog(); return; }
+        // Not a candidate (yet): blocked by an admin → say so here; otherwise the candidate step, then the CV dialog.
+        if (isCandidateBlocked(who)) {
+            initModal({
+                active: true,
+                modalTitle: translations.ApplyFlow.ModalTitle,
+                modalBody: <BlockedCandidateNote onClose={() => initModal({ active: false })} />,
+                modalStyle: { dialogClassName: "max-width-31rem", titleClass: 'font-RubikBold fs-1-125rem' },
+            });
+            return;
+        }
+        initModal({
+            active: true,
+            modalTitle: translations.ApplyFlow.ModalTitle,
+            modalBody: <CandidateStep user={who} onJoined={openCvDialog} />,
+            modalStyle: { dialogClassName: 'max-width-72-06rem', bodyClass: 'p-0', titleClass: 'font-RubikBold fs-1-125rem' },
+        });
+    };
+
+    // Back from signing in to apply (utils/applyIntent.ts): go on with the application once, without a second press.
+    const startRef = useRef(handleApplyJobClicked);
+    startRef.current = handleApplyJobClicked;
+    useEffect(() => {
+        if (!jobId || onExistingSite) return;
+        const unregister = registerApplyButtons(jobId);
+        const tryResume = () => {
+            if (useAuthStore.getState().user && takeReadyIntent(jobId)) startRef.current();
+        };
+        tryResume();
+        const off = onApplyIntentReady(tryResume);
+        return () => { unregister(); off(); };
+    }, [jobId, onExistingSite]);
 
     // A job of the existing site: shown here, but applications to it are not taken here (owner, 23.11.2026).
     if (onExistingSite) {
@@ -134,6 +172,7 @@ export const ApplyJobButtons: React.FC<ApplyJobButtonsProps> = ({jobId, applyPol
                             className="bg-color-purple-btn ms-3 ps-4 pe-4 pt-2 pb-2 fs-6 custom-button-width"
                             onClick={handleApplyJobClicked}
                             disabled={isAlreadyApplied}
+                            data-testid="apply-button"
                         >
                             {isAlreadyApplied ? translations.JobCard.ApplicationSubmitted : translations.JobCard.ApplyJob}
                         </Button>
@@ -152,16 +191,14 @@ export const ApplyJobButtons: React.FC<ApplyJobButtonsProps> = ({jobId, applyPol
                             </Button>
                             <Button
                                 className="bg-color-purple-btn ms-3 ps-4 pe-4 pt-2 pb-2 fs-6 custom-button-width"
+                                data-testid="apply-button"
                                 // self: the employer's details (apply directly); quick: the guest form; none: log in / register first.
                                 onClick={() => {
                                     if (isSelfApply) {
                                         track('apply_click', { job_id: jobId, apply_type: 'self_apply' });
                                         openDirectApplyModal();
                                     } else if (applyPolicy.guestMode !== 'quick') {
-                                        track('apply_click', { job_id: jobId, apply_type: 'guest' });
-                                        setApplyContext(jobId);
-                                        track('login_prompt', { job_id: jobId, source: 'apply' });
-                                        setOpenLogin(true);
+                                        signInToApply();
                                     } else {
                                         track('apply_click', { job_id: jobId, apply_type: 'guest' });
                                         startGuestApply(jobId, applyPolicy.quickCv === 'required', hasThreshold);

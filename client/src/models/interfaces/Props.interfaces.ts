@@ -150,6 +150,8 @@ export interface User {
   role: UserRole;
   /** The roles this session carries (several per account since 23.11.2026); `role` is the highest. */
   roles?: UserRole[];
+  /** Roles an admin blocked on this account (24.11.2026): "user" = the candidate role. Shown only to the person. */
+  blockedRoles?: string[];
   jobApplicationsId: string[];
   cvFileUrl?: string;
 }

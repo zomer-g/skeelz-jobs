@@ -111,8 +111,16 @@ Pure rules: `server/src/models/schemas/applyPolicy.ts` (unit tests `server/test/
 |---|---|
 | Visitor, not signed in — guest mode **self** (הגשה עצמאית) | The job page shows a "מגישים ישירות למעסיק" box with the employer's contact as stored on the job and the external link; they apply directly. `guestApply` is refused (`jb12`). |
 | Visitor, not signed in — guest mode **quick** (הגשה מהירה) | The guest form (name, email, phone, CV), handled by the nonprofit. |
-| Visitor, not signed in — guest mode **none** (סגורה) | Sign in / register first (`guestApply` → `jb10`). |
-| Registered and signed in | Regular apply (הגשה רגילה), **always**, whatever the guest mode. On a self-apply job the employer box is shown too. |
+| Visitor, not signed in — guest mode **none** (סגורה) | "הגש מועמדות" opens the sign-in window (worded for applying); after signing in — code by email, Google, Microsoft, a new person's sign-up form, the "complete your details" form — they land straight on that job's apply step (`guestApply` → `jb10`). |
+| Registered and signed in | Regular apply (הגשה רגילה), **always**, whatever the guest mode. On a self-apply job the employer box is shown too. Without the candidate role (an employer only, staff): the candidate step inside the dialog first (`docs/security.md` "Every signed-in person is a candidate"). |
+
+**Sign in → straight back to applying** (owner, 24.11.2026; `client/src/utils/applyIntent.ts`). The apply click
+remembers the job in the tab's sessionStorage (the job id and the time only; 30 minutes; used once). Google / Microsoft
+come back to `/job/<id>` (`return_to`, a same-site path built only from a job id of the site's own shape; the server's
+`safeReturnPath` checks it again); the in-window sign-in brings back the job modal kept aside. Closing the sign-in
+window, or signing up as an employer, forgets it. **No orange toasts in the apply flow**: every refusal is said in place,
+inside the dialog next to the button (`role="alert"`, focus moved to it): the guest form, the CV dialog, the candidate
+step, the sign-in window (a Google / Microsoft error, an expired sign-up form), the consent dialog.
 
 CV rule — **required** or **optional**, set separately:
 - **quick** + required: the guest form demands an upload; the server refuses without a claimable upload (`jb11`).

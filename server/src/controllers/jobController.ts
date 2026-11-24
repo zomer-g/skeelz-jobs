@@ -7,7 +7,7 @@ import { AuthErrorCodes, AuthErrorMessages, JobsErrorCodes, JobsErrorMessages } 
 import { filterOptions } from '../models/interfaces/general.interface.js';
 import { CreateJobDTO } from '../dto/createJobDto.js';
 import { UpdateJobDto } from '../dto/updateJobDto.js';
-import { UserRole, canManageContent, canViewStaffData } from '../models/enums.js';
+import { UserRole, blockedOf, canManageContent, canViewStaffData, isCandidate } from '../models/enums.js';
 import { CONTENT_MANAGER_REQUIRED, restrictedChanges } from '../security/roleFields.js';
 import { AuditWriteError, actorOf, auditDenied, writeAudit } from '../security/audit.js';
 import { peopleHandover } from '../security/handover.js';
@@ -269,6 +269,17 @@ export const applyJob = async (req: Request, res: Response, next: NextFunction) 
   const jobIdNumber = req.params.jobId;
 
   try {
+    // Only the candidate role applies (owner, 24.11.2026: every signed-in person is a candidate — the site adds the
+    // role first, with the candidate's details and consent, POST /users/me/roles/candidate). The gate also admits a
+    // staff session; a staff member without a usable candidate role is refused here, before anything is read or
+    // stored. A candidate role an admin blocked: role_blocked (never added back).
+    if (!isCandidate({ roles: req.authUser?.roles ?? [] })) {
+      const blocked = blockedOf(await userDAL.findUserById(String(userID)).catch(() => null)).includes('user');
+      auditDenied(req, blocked ? 'role_blocked:user' : 'candidate_role_needed');
+      return res.status(403).json(blocked
+        ? { message: 'This role is blocked on this account', code: 'role_blocked' }
+        : { message: 'Applying needs the candidate role', code: 'candidate_role_needed' });
+    }
     // A job of the existing site takes no applications here: refused before any consent is recorded. Jobs created
     // on this site take applications from every candidate, one copied from the existing site included (owner, 23.11.2026).
     assertJobTakesApplications(await jobsService.fetchJobById(String(jobIdNumber ?? '')));

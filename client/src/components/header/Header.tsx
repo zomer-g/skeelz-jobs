@@ -22,6 +22,7 @@ import { getLocalizedOptions } from '../../i18n/i18nHelper';
 import useToastStore from '../../store/Toast.store';
 import { useLocation, useNavigate } from 'react-router-dom';
 import LoginModal from '../login/LoginModal';
+import { clearApplyIntent, hasApplyIntent, resumeApplyIntent } from '../../utils/applyIntent';
 import { useSignInReturn, ssoSignOut } from '../../utils/signIn';
 import useModalStore from '../../store/Modal.store';
 import { useProfileModals } from '../register/profileModals';
@@ -52,7 +53,7 @@ interface RenderSubHeaderProps {
 
 const Header: React.FC<RenderSubHeaderProps> = ({ activeJob, activeJobIndex }) => {
   const location = useLocation();
-  const { initModal, closeModal, active, openPendingModalIfExists } = useModalStore();
+  const { initModal, closeModal, active, openPendingModalIfExists, storeCurrentModalAsPending } = useModalStore();
   const translations = i18n.getTranslations();
   const { openLogin, setOpenLogin,setUserTryToApply,userTryToApply } = useAuthStore();
   const navigate = useNavigate();
@@ -60,9 +61,10 @@ const Header: React.FC<RenderSubHeaderProps> = ({ activeJob, activeJobIndex }) =
   const { user, logOut } = useAuthStore();
   const [loginModalStatus, setLoginModalStatus] = useState<Boolean>(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const profileModals = useProfileModals();
-  // Back from "Continue with Google" (xhostd SSO): a new identity fills the sign-up form; missing details → complete them.
-  useSignInReturn({ onSignup: profileModals.openSsoSignup, onIncomplete: profileModals.openComplete });
+  const profileModals = useProfileModals({ onExpired: (text) => reopenLoginWithError(text) });
+  // Back from "Continue with Google" (xhostd SSO): a new identity fills the sign-up form; missing details → complete them;
+  // an error → the sign-in window again, saying why.
+  useSignInReturn({ onSignup: profileModals.openSsoSignup, onIncomplete: profileModals.openComplete, onError: (text) => reopenLoginWithError(text) });
   const formRef = useRef<FormHandle>(null);
   
 
@@ -145,18 +147,24 @@ const getList = (sp: URLSearchParams, key: string) =>
     }
   }, [initModal]);
 
-  // Function to open Login modal
-  const activateLoginModal = () => {
+  // Function to open Login modal. `error`: a sign-in that did not work, said inside the window (no toast).
+  // Opened by "הגש מועמדות" (utils/applyIntent.ts): worded for applying, and after signing in the application goes on.
+  const activateLoginModal = (error?: string) => {
     setLoginModalStatus(true)
+    const forApply = hasApplyIntent();
     initModal({
       active: true,
-      modalTitle: !userTryToApply ?translations.Header.Login : translations.Header.AlreadyRegisteredMessage ,
+      modalTitle: forApply ? translations.ApplyFlow.SignInTitle : !userTryToApply ? translations.Header.Login : translations.Header.AlreadyRegisteredMessage,
       modalBody: (<div style={{ minHeight: '28.437rem' }}>
         <LoginModal
-          onSuccess={() => {
+          forApply={forApply}
+          error={error}
+          onSuccess={(incomplete) => {
             setLoginModalStatus(false)
             closeModal();
-            openPendingModalIfExists();
+            // Required details missing: that form comes first (it goes on with the application when saved).
+            if (incomplete && hasApplyIntent()) return;
+            if (!resumeApplyIntent()) openPendingModalIfExists();
           }}
           onEmailSignup={() => {
             // A new address with a right code: the sign-up form (same details and consent as every sign-up).
@@ -172,8 +180,18 @@ const getList = (sp: URLSearchParams, key: string) =>
         bodyClass: "p-0",
         titleClass: 'font-RubikBold fs-1-125rem'
       },
-      onClose: () => { setLoginModalStatus(false); openPendingModalIfExists(); setUserTryToApply(false) },
+      // Closed without signing in: the visitor gave up applying for now.
+      onClose: () => { setLoginModalStatus(false); clearApplyIntent(); openPendingModalIfExists(); setUserTryToApply(false) },
     });
+  };
+  // Back from Google / Microsoft with an error, or a sign-up form that expired: the sign-in window again, saying why.
+  // Deferred: on /job/<id> the job modal opens in an effect of this same first render; the window goes over it and the
+  // job comes back when the window is closed.
+  const reopenLoginWithError = (error: string) => {
+    setTimeout(() => {
+      storeCurrentModalAsPending();
+      activateLoginModal(error);
+    }, 0);
   };
 
   const openDirectApplyModal = () => {

@@ -1,4 +1,5 @@
 import { RequestEnum } from '../../i18n/General.enums';
+import { applyIntentReturnPath } from '../../utils/applyIntent';
 import { Routes } from '../../i18n/Routes.enum';
 import { OnlyMessageResponse } from '../../models/interfaces/Api.interfaces';
 import { LoginResponse } from '../../models/interfaces/Props.interfaces';
@@ -52,14 +53,21 @@ export class LoginService {
 
     /** Full-page navigation to xhostd SSO (Google); comes back to the current page with ?signin=ok or ?signin_error=… */
     signInUrl(): string {
-        const here = typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/';
+        const here = this.returnPath();
         return `${environment.API_URL}${Routes.SSO_SIGN_IN}?return_to=${encodeURIComponent(here)}`;
     }
 
     /** Full-page navigation to "Continue with Microsoft" (candidates only); comes back the same way. */
     microsoftSignInUrl(): string {
-        const here = typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/';
+        const here = this.returnPath();
         return `${environment.API_URL}${Routes.MS_SIGN_IN}?return_to=${encodeURIComponent(here)}`;
+    }
+
+    /** Where a redirect sign-in comes back to: the job being applied to (a same-site /job/<id> path, utils/applyIntent.ts),
+     *  else the current page. The server checks it again (security/pure.ts safeReturnPath). */
+    private returnPath(): string {
+        if (typeof window === 'undefined') return '/';
+        return applyIntentReturnPath() ?? window.location.pathname + window.location.search;
     }
 
     private static instance: LoginService;
