@@ -3,7 +3,7 @@ import { AxiosError } from 'axios';
 import { GlobalErrorCodes, GlobalErrorMessages } from '../i18n/i18n.js';
 import * as settingsService from '../services/settingsService.js';
 import { ApplyPolicy, isValidPolicyValue, POLICY_FIELDS } from '../models/schemas/applyPolicy.js';
-import { actorOf, writeAudit } from '../security/audit.js';
+import { actorOf, auditDenied, writeAudit } from '../security/audit.js';
 import { isEmployerPostingMode } from '../security/employer.js';
 import { isSignupFieldMode, SIGNUP_FIELDS, signupFieldModes, SignupFieldsSetting } from '../security/pure.js';
 import * as customFields from '../services/customFieldsService.js';
@@ -203,6 +203,12 @@ export const listCustomFields = async (_req: Request, res: Response, next: NextF
 
 /** POST /admin/settings/custom-fields — body { form: 'signup'|'job', label, type, options?, required?, sortOrder?,
  *  active?, showOnJobPage? (job only), help? }. 400 with a code (customFields.ts checkDefinition), 409 too_many_fields. */
+/** Wording of a sign-up question: a content manager's change of these needs an admin's approval again. */
+const REWORDING_KEYS = ['label', 'options', 'help'] as const;
+/** A content manager tried to turn a sign-up question on (403, logged as access.denied). */
+export const ADMIN_APPROVAL_REQUIRED = 'admin_approval_required';
+const isAdminCaller = (req: Request) => (req.authUser?.roles ?? []).includes('admin');
+
 export const createCustomField = async (req: Request, res: Response, next: NextFunction) => {
   const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}) as Record<string, unknown>;
   const { form, ...rest } = body;
@@ -210,12 +216,19 @@ export const createCustomField = async (req: Request, res: Response, next: NextF
   if (form === 'signup' && rest.showOnJobPage === true) return refuseField(res, 400, 'bad_value'); // sign-up answers are never public
   const check = checkDefinition(rest);
   if (!check.ok) return refuseField(res, 400, check.error);
+  // A sign-up question is asked only after an ADMIN turned it on (owner, 24.11.2026; docs/settings.md "Sign-up questions
+  // need an admin"): a content manager's new one is saved OFF, awaiting an admin; an admin's own is approved by them.
+  const admin = isAdminCaller(req);
+  const pending = form === 'signup' && check.value.active && !admin;
+  if (pending) check.value.active = false;
   try {
-    const field = await customFields.createDefinition(form, check.value, req.authJwtPayload?.userID);
+    const field = await customFields.createDefinition(form, check.value, req.authJwtPayload?.userID,
+      form === 'signup' && check.value.active && admin ? actorOf(req) : null);
     void writeAudit(actorOf(req), 'settings.custom_field_created', `custom_field:${field.id}`, {
       form, type: field.type, label: field.label, required: field.required, active: field.active, options: field.options.length,
+      ...(form === 'signup' ? { awaiting_admin: pending, approved: field.active } : {}),
     });
-    res.status(201).json({ data: { field } });
+    res.status(201).json({ data: { field, ...(pending ? { awaitingAdmin: true } : {}) } });
   } catch (error) {
     if (error instanceof customFields.TooManyFieldsError) return refuseField(res, 409, 'too_many_fields');
     console.error('[settings] custom field create failed', (error as Error).message);
@@ -237,14 +250,32 @@ export const updateCustomField = async (req: Request, res: Response, next: NextF
     if (!check.ok) return refuseField(res, 400, check.error);
     const changed = changedKeys(base, check.value);
     if (!changed.length) return res.json({ data: { field: def } });
-    const field = await customFields.updateDefinition(def, check.value, req.authJwtPayload?.userID);
+    // Sign-up questions (owner, 24.11.2026): only an admin turns one on; a content manager who rewords an active one
+    // (label, options, help) turns it off until an admin approves the new wording. An admin's change is approved.
+    let approval: Parameters<typeof customFields.updateDefinition>[3] = { kind: 'keep' };
+    let awaitingAdmin = false;
+    if (def.form === 'signup') {
+      const admin = isAdminCaller(req);
+      const turningOn = check.value.active && !def.active;
+      const reworded = changed.some((k) => (REWORDING_KEYS as readonly string[]).includes(k));
+      if (!admin && turningOn) {
+        auditDenied(req, ADMIN_APPROVAL_REQUIRED);
+        return refuseField(res, 403, ADMIN_APPROVAL_REQUIRED);
+      }
+      if (!admin && reworded) { check.value.active = false; approval = { kind: 'clear' }; awaitingAdmin = def.active || !def.approvedAt; }
+      else if (admin && check.value.active && (turningOn || reworded || !def.approvedAt)) approval = { kind: 'approve', by: actorOf(req) };
+    }
+    const field = await customFields.updateDefinition(def, check.value, req.authJwtPayload?.userID, approval);
+    const finalChanged = changedKeys(base, check.value);
     void writeAudit(actorOf(req), 'settings.custom_field_updated', `custom_field:${def.id}`, {
-      form: def.form, changed,
-      ...(changed.includes('label') ? { label: field.label } : {}),
-      ...(changed.includes('active') ? { active: field.active } : {}),
-      ...(changed.includes('required') ? { required: field.required } : {}),
+      form: def.form, changed: finalChanged,
+      ...(finalChanged.includes('label') ? { label: field.label } : {}),
+      ...(finalChanged.includes('active') ? { active: field.active } : {}),
+      ...(finalChanged.includes('required') ? { required: field.required } : {}),
+      ...(awaitingAdmin ? { awaiting_admin: true } : {}),
     });
-    res.json({ data: { field } });
+    if (approval.kind === 'approve') void writeAudit(actorOf(req), 'settings.custom_field_approved', `custom_field:${def.id}`, { form: def.form, label: field.label });
+    res.json({ data: { field, ...(awaitingAdmin ? { awaitingAdmin: true } : {}) } });
   } catch (error) {
     console.error('[settings] custom field update failed', (error as Error).message);
     next(new AxiosError(GlobalErrorMessages.GENERAL_ERROR, GlobalErrorCodes.GENERAL_ERROR));

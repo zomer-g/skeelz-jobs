@@ -54,8 +54,11 @@ test('the job as the employer edits it: plain text, the public application email
 });
 
 test('edit requests: only the allowed fields, validated, only what changed', () => {
-  assert.deepEqual([...EDITABLE_JOB_FIELDS].sort(), ['citySymbol', 'companyName', 'description', 'externalLink', 'jobScope', 'publicEmail', 'requiredSkills', 'thresholdCondition', 'title']);
-  for (const k of ['status', 'isSponsored', 'publishDate', 'comments', 'guestModeOverride', 'pinnedAt', 'contactPersonPhone']) {
+  // Owner, 24.11.2026: every field of the job (after staff approve), not how SKEELZ runs the board.
+  assert.deepEqual([...EDITABLE_JOB_FIELDS].sort(), ['citySymbol', 'companyName', 'contactPersonName', 'contactPersonPhone', 'description',
+    'externalLink', 'guestModeOverride', 'jobScope', 'publicEmail', 'quickCvOverride', 'regularCvOverride', 'requiredSkills', 'status',
+    'thresholdCondition', 'title']);
+  for (const k of ['isSponsored', 'publishDate', 'comments', 'pinnedAt', 'bumpedAt', 'deletedAt', 'uploadBy', 'managedFields', 'legacyState']) {
     const r = checkEditRequest({ [k]: 'x' }, current);
     assert.equal(r.ok, false, k);
     if (!r.ok) assert.equal((r.errors as any)._, 'bad_field', k);
@@ -72,6 +75,26 @@ test('edit requests: only the allowed fields, validated, only what changed', () 
     assert.deepEqual(r.fields.sort(), ['externalLink', 'requiredSkills', 'title']);
     assert.equal(r.changes.externalLink, null);
   }
+});
+
+test('edit requests: the job contact, status and apply settings, validated', () => {
+  const ok = checkEditRequest({ contactPersonName: 'דנה כהן', contactPersonPhone: '050-1234567', status: 'Closed',
+    guestModeOverride: 'self', quickCvOverride: 'required', regularCvOverride: '' }, current);
+  assert.equal(ok.ok, true);
+  if (ok.ok) {
+    assert.deepEqual(ok.fields.sort(), ['contactPersonName', 'contactPersonPhone', 'guestModeOverride', 'quickCvOverride', 'status']);
+    assert.equal(ok.changes.guestModeOverride, 'self');
+  }
+  const bad = checkEditRequest({ contactPersonName: 'x1', contactPersonPhone: 'abc', status: 'Deleted', guestModeOverride: 'open', quickCvOverride: 'maybe' }, current);
+  assert.equal(bad.ok, false);
+  if (!bad.ok) assert.deepEqual(Object.keys(bad.errors).sort(), ['contactPersonName', 'contactPersonPhone', 'guestModeOverride', 'quickCvOverride', 'status']);
+  // Back to the site's default / clearing the contact: null.
+  const withOverride = jobToEditable({ ...job, guestModeOverride: 'none', contactPersonName: 'דנה כהן' } as any);
+  const clear = checkEditRequest({ guestModeOverride: null, contactPersonName: '' }, withOverride);
+  assert.equal(clear.ok, true);
+  if (clear.ok) { assert.equal(clear.changes.guestModeOverride, null); assert.equal(clear.changes.contactPersonName, null); }
+  const u = changesToJobUpdate({ contactPersonName: null, status: 'Suspended', guestModeOverride: null } as any, descriptionToHtml);
+  assert.deepEqual(u, { contactPersonName: '', status: 'Suspended', guestModeOverride: null });
 });
 
 test('the comparison shows base, current and requested, and flags a field that changed since', () => {

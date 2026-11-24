@@ -87,7 +87,7 @@ export const revokeToken = async (req: Request, res: Response, next: NextFunctio
  * logged as api_token.revoked with the reason. The gate also refuses such tokens on use (issuerRefusal), so this
  * is belt and braces that also shows the state on the tokens screen.
  */
-export const revokeTokensOf = async (userId: string, by: string, reason: 'issuer_deactivated' | 'issuer_role_changed' | 'issuer_sessions_revoked') => {
+export const revokeTokensOf = async (userId: string, by: string, reason: 'issuer_deactivated' | 'issuer_role_changed' | 'issuer_sessions_revoked' | 'issuer_role_blocked') => {
   const rows = await query<{ prefix: string; name: string }>(
     `UPDATE api_tokens SET revoked_at = now(), revoked_by = $1 WHERE created_by_user_id = $2 AND revoked_at IS NULL RETURNING prefix, name`,
     [by, userId]);

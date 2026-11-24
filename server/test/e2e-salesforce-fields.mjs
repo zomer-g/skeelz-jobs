@@ -81,6 +81,8 @@ await check('setup: Salesforce is on, pointed at the mock; content managers add 
   assert.equal(b.status, 201, b.text); SALARY = b.json.data.field.id;
   const c = await cm.req('POST', '/api/admin/settings/custom-fields', { form: 'signup', label: 'הערה', type: 'text' });
   assert.equal(c.status, 201); OTHER = c.json.data.field.id;
+  // A content manager's sign-up question is asked only once an admin turns it on (owner, 24.11.2026).
+  for (const id of [SHIFT, OTHER]) assert.equal((await admin.req('PATCH', `/api/admin/settings/custom-fields/${id}`, { active: true })).status, 200);
   const list = (await cm.req('GET', '/api/admin/settings/custom-fields')).json.data;
   assert.equal(list.salesforce.enabled, true);
   assert.equal(list.salesforce.status[SHIFT], 'not_linked');

@@ -1,3 +1,4 @@
+import { isCandidate } from '../models/enums.js';
 // Fields content managers add to the sign-up form and the job form (models/schemas/customFields.ts, docs/settings.md).
 // One process, so the definitions are held in memory and refreshed on every write and at least every minute; reads that
 // can't wait (rowToJob, which is synchronous) use the last loaded copy and fail CLOSED: with nothing loaded, no added
@@ -17,6 +18,7 @@ const rowToDef = (r: any): CustomFieldDef => ({
   id: r.id, form: r.form, label: r.label, type: r.type, options: Array.isArray(r.options) ? r.options.map(String) : [],
   required: !!r.required, sortOrder: Number(r.sort_order) || 0, active: !!r.active, showOnJobPage: !!r.show_on_job_page,
   help: r.help ?? '', sfField: r.sf_field ?? null,
+  approvedAt: r.approved_at ?? null,
 });
 
 const load = async (): Promise<CustomFieldDef[]> => {
@@ -54,7 +56,9 @@ export const findDefinition = async (id: string): Promise<CustomFieldDef | null>
 
 export class TooManyFieldsError extends Error {}
 
-export const createDefinition = async (form: CustomFieldForm, value: Extract<DefinitionCheck, { ok: true }>['value'], by: string | undefined): Promise<CustomFieldDef> => {
+/** approvedBy: the admin who turned a sign-up question on (null = not approved; job fields need none). */
+export const createDefinition = async (form: CustomFieldForm, value: Extract<DefinitionCheck, { ok: true }>['value'], by: string | undefined,
+  approvedBy: string | null = null): Promise<CustomFieldDef> => {
   const count = await queryOne<{ n: number }>(`SELECT COUNT(*)::int AS n FROM custom_fields WHERE form = $1`, [form]);
   if (Number(count?.n ?? 0) >= CUSTOM_FIELD_LIMITS.perForm) throw new TooManyFieldsError();
   // A new field goes last unless an order was given.
@@ -65,21 +69,27 @@ export const createDefinition = async (form: CustomFieldForm, value: Extract<Def
   }
   const id = newObjectId();
   const r = await queryOne(
-    `INSERT INTO custom_fields (id, form, label, type, options, required, sort_order, active, show_on_job_page, help, created_by, updated_by)
-     VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$11) RETURNING *`,
+    `INSERT INTO custom_fields (id, form, label, type, options, required, sort_order, active, show_on_job_page, help, created_by, updated_by,
+                                approved_by, approved_at)
+     VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$11,$12, CASE WHEN $12::text IS NULL THEN NULL ELSE now() END) RETURNING *`,
     [id, form, value.label, value.type, JSON.stringify(value.options), value.required, order, value.active,
-      form === 'job' && value.showOnJobPage, value.help, by ?? null]);
+      form === 'job' && value.showOnJobPage, value.help, by ?? null, approvedBy]);
   await load();
   jobsChanged(); // the job page shows the labels of the job fields
   return rowToDef(r);
 };
 
-export const updateDefinition = async (def: CustomFieldDef, value: Extract<DefinitionCheck, { ok: true }>['value'], by: string | undefined): Promise<CustomFieldDef> => {
+/** approval: 'approve' (an admin, by) / 'clear' (reworded by a content manager: off until approved) / 'keep'. */
+export const updateDefinition = async (def: CustomFieldDef, value: Extract<DefinitionCheck, { ok: true }>['value'], by: string | undefined,
+  approval: { kind: 'approve'; by: string } | { kind: 'clear' } | { kind: 'keep' } = { kind: 'keep' }): Promise<CustomFieldDef> => {
   const r = await queryOne(
     `UPDATE custom_fields SET label = $2, options = $3::jsonb, required = $4, sort_order = $5, active = $6, show_on_job_page = $7,
-       help = $8, updated_by = $9, updated_at = now() WHERE id = $1 RETURNING *`,
+       help = $8, updated_by = $9, updated_at = now(),
+       approved_by = CASE $10 WHEN 'approve' THEN $11 WHEN 'clear' THEN NULL ELSE approved_by END,
+       approved_at = CASE $10 WHEN 'approve' THEN now() WHEN 'clear' THEN NULL ELSE approved_at END
+     WHERE id = $1 RETURNING *`,
     [def.id, value.label, JSON.stringify(value.options), value.required, value.sortOrder, value.active,
-      def.form === 'job' && value.showOnJobPage, value.help, by ?? null]);
+      def.form === 'job' && value.showOnJobPage, value.help, by ?? null, approval.kind, approval.kind === 'approve' ? approval.by : null]);
   await load();
   jobsChanged(); // the job page shows the labels of the job fields
   return rowToDef(r);
@@ -92,9 +102,9 @@ export const checkValues = async (form: CustomFieldForm, raw: unknown, opts: { r
 /** Stores a candidate's answers (merged into the stored ones; null removes one). Candidates only. */
 export const saveUserValues = async (userId: string, patch: Record<string, CustomValue | null>): Promise<void> => {
   if (!Object.keys(patch).length) return;
-  const cur = await queryOne<{ custom_fields: unknown }>(`SELECT custom_fields FROM users WHERE id = $1 AND role = 'user'`, [userId]);
+  const cur = await queryOne<{ custom_fields: unknown }>(`SELECT custom_fields FROM users WHERE id = $1 AND 'user' = ANY(roles)`, [userId]);
   if (!cur) return;
-  await query(`UPDATE users SET custom_fields = $2::jsonb, updated_at = now() WHERE id = $1 AND role = 'user'`,
+  await query(`UPDATE users SET custom_fields = $2::jsonb, updated_at = now() WHERE id = $1 AND 'user' = ANY(roles)`,
     [userId, JSON.stringify(mergeCustomValues(cur.custom_fields, patch))]);
 };
 
@@ -104,8 +114,9 @@ export const userValues = async (userId: string): Promise<Record<string, CustomV
 };
 
 /** A candidate who has not answered an active required added field (asked to complete their details). */
-export const userMissingRequired = async (user: { id?: unknown; _id?: unknown; role?: string | null } | null | undefined): Promise<boolean> => {
-  if (!user || user.role !== 'user') return false;
+export const userMissingRequired = async (user: { id?: unknown; _id?: unknown; role?: string | null; roles?: readonly string[] | null } | null | undefined): Promise<boolean> => {
+  // Several roles per account: a candidate who is also an employer / staff is still asked (security review 24.11, M1).
+  if (!user || !isCandidate(user)) return false;
   const defs = await definitionsOf('signup');
   if (!defs.some((d) => d.active && d.required)) return false;
   return missingRequired(defs, await userValues(String(user.id ?? user._id))).length > 0;

@@ -125,3 +125,19 @@ export const ensureSmooveGuest = async (guest: Guest): Promise<any> => {
     console.error("Failed to create guest at Smoove:", (err as any)?.response?.status ?? (err as any)?.message);
   }
 };
+/** Unsubscribes an address from every SMOOV list (a removal: services/marketingList.ts). Only when SMOOV is on; the
+ *  address goes only in the request path, never in a log (status codes only). */
+export const unsubscribeSmooveContact = async (email: string): Promise<void> => {
+    if (!appConfig.smoove.enableSmoove || !appConfig.smoove.smooveApiKey) return;
+    const url = `${appConfig.smoove.smooveApiUrl.replace(/\/+$/, '')}/${encodeURIComponent(email.trim().toLowerCase())}/Unsubscribe?by=Email`;
+    try {
+        await axios.post(url, { reason: 'removal requested' }, {
+            headers: { Authorization: `Bearer ${appConfig.smoove.smooveApiKey}`, 'Content-Type': 'application/json' },
+        });
+        console.log('SMOOV: contact unsubscribed');
+    } catch (err: unknown) {
+        // 404 = never on the list: nothing to do.
+        if (axios.isAxiosError(err) && err.response?.status === 404) return;
+        console.error('SMOOV: unsubscribe failed', (err as any)?.response?.status ?? (err as any)?.code ?? 'error');
+    }
+};

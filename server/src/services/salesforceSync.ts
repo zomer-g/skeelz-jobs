@@ -1,3 +1,4 @@
+import { isCandidate } from '../models/enums.js';
 /* ============================================================================
  *  Salesforce sync: a queue in salesforce_sync and a background worker.
  *
@@ -122,7 +123,7 @@ const pushJob = async (id: string, row: Row | null): Promise<Done> => {
 
 const pushCandidate = async (id: string, row: Row | null): Promise<Done> => {
   const user: any = await userDAL.findUserById(id);
-  if (!user || user.role !== 'user') throw new PushError('not_found');
+  if (!user || !isCandidate(user)) throw new PushError('not_found'); // the candidate role, whatever else they hold (M1)
   if (user.legacyState === 'mirror') throw new PushError('mirror_read_only');
   delete user.password;
   user.idNumber = await userDAL.findIdNumber(id); // sent only when the org has the field (salesforceUtils.ID_NUMBER_FIELD)

@@ -4,7 +4,7 @@ import { UpdateUserDto } from "../dto/updateUserDto.js";
 import { usersFilter } from "../models/interfaces/general.interface.js";
 import { escapeLike, query, queryOne } from "../config/db.js";
 import { isObjectId, newObjectId } from "../utils/ids.js";
-import { UserRole, isCandidate, rolesOf } from "../models/enums.js";
+import { UserRole, blockedOf, isCandidate, rolesOf } from "../models/enums.js";
 import { ownYesClearsRemoval, STATUS_SQL } from './marketingDAL.js';
 import { isMarketingStatus, marketingStatus } from '../security/marketing.js';
 import { TERMS_VERSION } from "../security/consent.js";
@@ -41,6 +41,8 @@ export const rowToUser = (r: any): IUser => {
     role: r.role,
     // Several roles per account (23.11.2026): the set; `role` is the highest of them (DB trigger).
     roles: rolesOf(r),
+    // Roles an admin blocked (24.11.2026): kept in roles, but no gate or sign-in counts them (enums.ts usableRolesOf).
+    blockedRoles: blockedOf(r),
     // A candidate of the existing site: 'mirror' = read-only here until the cutover (services/legacyCandidates.ts).
     legacyState: r.legacy_state ?? null,
   };

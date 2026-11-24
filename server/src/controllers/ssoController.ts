@@ -39,7 +39,7 @@ import { isCandidate } from '../models/enums.js';
 import { checkProfile, isStaffRole, isDbError, profileIncomplete, requestHost, safeErrorText, safeReturnPath, withQueryParam } from '../security/pure.js';
 import { setAccessTokenInCookies, setRefreshTokenInCookies } from '../utils/authUtils.js';
 import { loginActor } from './authController.js';
-import { auditLogin, signinContext, signinFailed } from '../security/signins.js';
+import { auditLogin, refusedAction, signinContext, signinFailed } from '../security/signins.js';
 import { checkConsent } from '../security/consent.js';
 import { emailCodeEnabled } from '../security/emailCode.js';
 import { auditEmployerSignup, signUpEmployer, syncEmployerLater, wantsEmployer, withEmployerDetails } from '../services/employerAccounts.js';
@@ -194,7 +194,8 @@ export const ssoCallback = async (req: Request, res: Response) => {
       s = await authService.issueSession(user, 'xhostd'); // refuses a deactivated account
     } catch (e) {
       if ((e as any)?.isAxiosError) {
-        signinFailed(req, loginActor(user), 'auth.login_refused_deactivated', user, { method: 'xhostd', role: user.role });
+        // Deactivated, or every role this session would carry blocked by an admin (24.11.2026).
+        signinFailed(req, loginActor(user), refusedAction(e), user, { method: 'xhostd', role: user.role });
         return finish(res, returnPath, 'failed');
       }
       throw e;

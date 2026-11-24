@@ -43,7 +43,33 @@ role). At most one staff role per account (`users_roles_check`). Each role keeps
   `employer_role_added`), logged `auth.role_added` (the role only). No route adds a staff role to oneself.
 - A **legacy mirror** candidate (read-only until the cutover) may get other roles; it must keep the candidate role
   (`users_legacy_guard`).
-- Deactivation stays per account (all its roles).
+- Deactivation stays per account (all its roles). To stop ONE role, block it (below).
+
+**Blocking a role** (owner, 24.11.2026: "an admin blocks each of the three roles of a specific user, one by one — e.g.
+keep someone as a candidate but block them as an employer"; `src/controllers/roleBlocksController.ts`, admins only).
+`users.blocked_roles` holds the blocked kinds: `user` (the candidate role), `employer`, `staff` (whichever staff role the
+account holds; DB check `users_blocked_roles_check`). A blocked role **stays in `users.roles`** (its data stays: the
+candidate's record, the employer's jobs) but counts for nothing: every place that decides what a person may do uses
+`usableRolesOf` (`models/enums.ts`) = the roles minus the blocked ones, then `effectiveRoles` for the sign-in method:
+- **Gates** (`jwtAuthMiddleware`, read from the DB on every request) never open on a blocked role.
+- **Every sign-in path** (Google, Microsoft, code by email; sign-up into an existing account included) goes through
+  `authService.issueSession`, which refuses when no role of that session would be left (`au19` `ROLES_BLOCKED`;
+  `auth.login_refused_blocked`, for codes `auth.email_code_refused_blocked` — no code is sent, the answer stays the neutral
+  one). Otherwise the session carries only the open roles.
+- **A block closes every session at once** (`sessions_revoked_at` + refresh tokens + the internal API keys the person
+  issued, `issuer_role_blocked`), like a role change. The person signs in again and gets the roles still open; with none
+  left, no sign-in works. Removing the staff role (staff screen) does the same (unchanged).
+- The person can't add a blocked role back (`POST /users/me/roles/candidate | employer` → 403 `role_blocked`); a role
+  the account doesn't hold yet may be blocked in advance. Only an admin unblocks (unblocking closes nothing).
+- A blocked employer receives no forwards (`employer_inactive`, as a deactivated one) and sees nothing (the gate).
+- Lock-out: an admin can't block their own staff role (`self_staff`) nor that of the last admin who can act
+  (`last_admin`; `activeAdmins` doesn't count admins whose staff role is blocked). Changes run one at a time with the
+  staff screen's.
+- Where: `/staff-management` (per staff member, and "חסימת תפקיד בחשבון": find ANY account by email — employers are on no
+  list) and `/users-management` (per candidate, admins only). `GET /api/admin/role-blocks?email=` / `GET …/:userId` return
+  the account id, the kinds of role it holds and the blocks — nothing else about the person. `PUT
+  /api/admin/role-blocks/:userId/:role { blocked }`. Logged `users.role_blocked` / `users.role_unblocked` (target the
+  account id; role, roles, before / after, `sessions_closed`) and `users.role_blocks_viewed`.
 
 Staff users (`src/controllers/staffController.ts`,
 `/api/admin/staff`): add by email (an existing account — a candidate, an employer — gets the staff role ADDED and keeps
@@ -97,8 +123,9 @@ for local tests only (`DEV_MODE=true`).
   anonymous CV upload + cancel of one's own pending upload, the token-protected sandbox export, the employer job form
   (`POST /job-submissions`: 5/hour per IP, honeypot, at most 300 pending, field caps, server-side validation, plain text only).
 - Employer submission review (`/admin/job-submissions/*`) and employers' edit requests (`/admin/job-edit-requests/*`) sit
-  behind `contentGate` in `routes.ts`, which is `staffViewers` (a coordinator approves, except a threshold condition:
-  403 `content_manager_required`). The settings (`/admin/settings/apply-policy` PUT, `/admin/settings/employer-posting`,
+  behind `contentGate` in `routes.ts`, which is `staffViewers` (a coordinator approves, except a threshold condition or
+  a job's apply settings: 403 `content_manager_required`; `CONTENT_MANAGER_FIELDS`). Since 24.11.2026 an employer may ask
+  to change every field of their job (`docs/employers.md` "Edit requests"), nothing applied before staff approve. The settings (`/admin/settings/apply-policy` PUT, `/admin/settings/employer-posting`,
   `/admin/settings/signup-fields`, `/admin/settings/custom-fields`) are content-manager-only — all on the settings screen
   `/settings` (`docs/settings.md`); the job form's added-field definitions (`GET /admin/job-fields`) are `staffViewers`; reading the apply-policy defaults is `staffViewers` (the
   jobs table shows them). With employer posting
@@ -386,7 +413,8 @@ candidate or an employer it shows the id and role, never the email.
 | `settings.signup_fields_updated` | no | content manager / admin | `changed` (field names), `before` / `after` (`required` / `optional` / `hidden` for those fields: setting values, not personal data) |
 | `settings.custom_field_created` | no | content manager / admin | target `custom_field:<id>`; `form` (`signup` / `job`), `type`, `label`, `required`, `active`, number of `options` (the staff's own wording, never an answer) |
 | `salesforce.custom_field_linked` | no | admin | target `custom_field:<id>`; `form`, `object` (Contact / Case), `sf_field` and `before` (Salesforce API names or null), `status` (whether the org has it) |
-| `settings.custom_field_updated` | no | content manager / admin | target `custom_field:<id>`; `form`, `changed` (names of the definition keys), the new `label` / `active` / `required` when those changed |
+| `settings.custom_field_updated` | no | content manager / admin | target `custom_field:<id>`; `form`, `changed` (names of the definition keys), the new `label` / `active` / `required` when those changed; `awaiting_admin` when a content manager's rewording turned a sign-up question off |
+| `settings.custom_field_approved` (24.11.2026) | no | admin | target `custom_field:<id>`; `form`, `label`: an admin turned a sign-up question on (docs/settings.md "Sign-up questions need an admin") |
 | `auth.signup_employer` (new employer account, when the sign-up form is sent with "employer") | no | `user:<id>` | role, `method` (`xhostd` / `microsoft` / `email_code`), `marketing`, `ip`, `device` |
 | `employer.profile_updated`, `employer.submissions_claimed` | no | `user:<id>` (the employer) | target `self`; `fields` (names only) / `count`, `jobs`, `ids` (submission ids) |
 | `jobs.edit_requested`, `jobs.edit_withdrawn` | no | `user:<id>` (the employer) | target = request id; `job`, `fields` (names only, never values) |
@@ -435,9 +463,13 @@ candidate or an employer it shows the id and role, never the email.
 | `auth.role_added` (someone added the candidate / employer role to their own account, 23.11.2026) | no | the person | `role` (`user` / `employer`), `marketing`, `has_cv` (candidate) — never field values |
 | `staff.deactivated`, `staff.reactivated` | no | admin | role |
 | `staff.sessions_revoked` | no | admin | role, self |
+| `users.role_blocked`, `users.role_unblocked` (24.11.2026, "חסימת תפקידים": one of the three kinds of role of an account blocked / unblocked) | no | admin | target = the account id; `role` (`user` / `employer` / `staff`), `roles` (the kinds it holds), `blocked_before`, `blocked_after`, `sessions_closed` (true on a block: every session closed, API keys revoked with `issuer_role_blocked`), `self` — never the person's data |
+| `mail.address_keys_moved` (boot, 24.11.2026) | no | `system:migration` | how many rows of `marketing_optouts` / `mail_suppressions` moved from the legacy key to `MARKETING_OPTOUT_SECRET`'s (counts only) |
+| `users.role_blocks_viewed` | no | admin | target = the account id; `by` (`id` / `email`: found by its email) |
+| `auth.login_refused_blocked`, `auth.email_code_refused_blocked` | no | staff email / `user:<id>` / `anonymous:<ip>` | a sign-in (Google / Microsoft / code by email) refused because every role it would carry is blocked; the same details as the `_deactivated` refusals; counts towards a staff account's burst of failures |
 | `staff.roles_split` (once, at the migration) | no | `system:migration` | admin email, number moved to content manager |
 | `sandbox.refreshed` | no | admin (sandbox only) | counts |
-| `api_token.created`, `api_token.revoked` | no | admin | target `token:<prefix>`; name, scopes, days, expiry (never the token); revoked: `reason` (`manual`, `issuer_deactivated`, `issuer_role_changed`, `issuer_sessions_revoked`) |
+| `api_token.created`, `api_token.revoked` | no | admin | target `token:<prefix>`; name, scopes, days, expiry (never the token); revoked: `reason` (`manual`, `issuer_deactivated`, `issuer_role_changed`, `issuer_sessions_revoked`, `issuer_role_blocked`) |
 | `salesforce.pushed` | yes | `system:salesforce-sync` (the sync queue) / `token:<prefix>` / `system:internal-api` / staff (guest backfill) | kind (`job`, `candidate`, `employer`, `application`, `guest_application`), record ids, people's ids, count (written before sending) |
 | `salesforce.checked` | no | admin | ok, names of the failed checks (read only: nothing sent) |
 | `salesforce.retried` | no | admin | kind (or `all`), how many went back to the queue |

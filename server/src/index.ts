@@ -13,6 +13,7 @@ import publicApiRouter, { PUBLIC_API_PREFIX } from './public/publicApi.js';
 import publicMcpRouter from './public/mcpServer.js';
 import appConfig from './config/appConfig.js';
 import { migrate, pool } from './config/db.js';
+import { rekeyAddressLists } from './services/addressKeyRekey.js';
 import { errorMiddleware } from './middleware/errorMiddleware.js';
 import { checkEnvVars } from './utils/envChecker.js';
 import * as jobDAL from './dal/jobDAL.js';
@@ -149,6 +150,8 @@ const startServer = async () => {
     await applyLegacyJobsMode();
     // The existing site's candidates: read-only copies or ordinary candidates, by LEGACY_CANDIDATES_MODE (services/legacyCandidates.ts).
     await applyLegacyCandidatesMode();
+    // The removal and suppression lists: their own key (MARKETING_OPTOUT_SECRET); known addresses re-keyed (M3, 24.11.2026).
+    await rekeyAddressLists();
     if (process.env.SSO_ENABLED !== 'true') {
       console.warn('[sso] SSO_ENABLED is not true: staff (admin / content manager) cannot sign in at all (password and Google are refused for staff)');
     }

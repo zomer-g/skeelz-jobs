@@ -6,7 +6,7 @@ import { i18n } from '../../i18n/I18n';
 import useLanguageStore from '../../store/Language.store';
 import { getLocalizedDictionary } from '../../i18n/i18nHelper';
 import { LocalizedDataKey } from '../../i18n/General.enums';
-import { ApiError, api, fmtDate } from './employerApi';
+import { ApiError, api, extraLabel, extraValueText, fmtDate } from './employerApi';
 import { LocationService } from '../../services/api/Location.service';
 import { SkillsService } from '../../services/api/Skills.service';
 import { isString } from '../../utils/utils';
@@ -78,9 +78,12 @@ const EditRequestsReview: React.FC = () => {
 
   const label = (k: string) => (({ title: tf.JobTitle, companyName: tf.CompanyName, citySymbol: tf.City, jobScope: tf.JobScope,
     requiredSkills: tf.Skills, description: tf.Description, externalLink: tf.ExternalLink, publicEmail: tf.PublicEmail,
-    thresholdCondition: i18n.getTranslations().Threshold.Label } as Record<string, string>)[k] ?? (k.startsWith('customFields') ? tf.ExtraSection : k));
+    thresholdCondition: i18n.getTranslations().Threshold.Label } as Record<string, string>)[k]
+    ?? extraLabel(k, i18n.getTranslations().ApplyPolicy) ?? (k.startsWith('customFields') ? tf.ExtraSection : k));
   // Values are shown as text, never as HTML (they come from an employer).
   const show = (field: string, v: unknown): string => {
+    const extra = extraValueText(field, v, i18n.getTranslations().ApplyPolicy);
+    if (extra !== undefined) return extra;
     if (v === null || v === undefined || v === '' || v === false) return '—';
     if (v === true) return 'כן';
     if (field === 'citySymbol') return cities[String(v)] ?? String(v);

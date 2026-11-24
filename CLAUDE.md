@@ -25,12 +25,16 @@ One Node process: Express API (`server/`) + built React client (`client/dist`). 
   appear in the employer form and edit requests, and (only those marked "show on the job page") in the public API / MCP
   (owner, 23.11.2026). Salesforce: an added field is sent only after an admin linked it to a field the owner created in
   the org (`custom_fields.sf_field`, checked by describe; Contact / the Position Case) — the site never creates fields
-  there (`docs/settings.md`).
+  there (`docs/settings.md`). **A sign-up question is asked only after an ADMIN turns it on** (owner, 24.11.2026: it may
+  touch sensitive information): a content manager's new or reworded one is saved off, awaiting an admin (403
+  `admin_approval_required` on turning it on; `approved_by` / `approved_at`, `settings.custom_field_approved`).
 - **Employers** (role `employer`, `docs/employers.md`) open only `/employer/*` (`employerOnly`); no other gate admits them
   (`signedIn` = candidates + staff). Of candidates an employer sees ONLY the name + CV of applications a content manager
   forwarded ("העברה למעסיק", `employer_forwards`) for their own non-imported job, until 90 days after it closed, through
   the hand-overs with the employer budgets (`employerPeople` / `employerCvs`). Never an email, phone, other field, count or
-  anything not forwarded. Their edit requests change a job only when a coordinator or content manager approves (a threshold condition: a content manager). Several roles per account (owner, 23.11.2026): a person adds the employer / candidate role to their own account
+  anything not forwarded. Their edit requests may ask to change EVERY field of their job (owner, 24.11.2026: contact, status,
+  apply settings, every added field — staff-only ones write-only; never pin / sponsored / dates / comments) and change it only
+  when a coordinator or content manager approves (a threshold condition or an apply setting: a content manager). Several roles per account (owner, 23.11.2026): a person adds the employer / candidate role to their own account
   (`POST /users/me/roles/employer|candidate`, gate `anyAccount`, used nowhere else); only an admin adds a staff role.
   Each role keeps its own gate, hand-overs and limits; the employer budgets belong to the account (`user:<id>`).
 - **Roles come from the DB, never from the token.** Read `req.authUser.role` / `req.authUser.roles` /
@@ -40,6 +44,11 @@ One Node process: Express API (`server/`) + built React client (`client/dist`). 
   `rolesOf` (`models/enums.ts`) or `'user' = ANY(roles)` in SQL, never `role = 'user'` / `role = 'employer'`. Gates
   open on ANY role of the session (`req.authUser.roles`); staff roles count only on a Google (xhostd SSO) session
   (`security/pure.ts effectiveRoles`). At most one staff role per account.
+- **Blocking a role** (owner, 24.11.2026; `docs/security.md`): an admin blocks candidate / employer / staff of one account,
+  one by one (`users.blocked_roles`, `/api/admin/role-blocks`, adminOnly). A blocked role stays in `roles` but counts for
+  nothing: decide what a person may do with `usableRolesOf` (never `rolesOf`) — the gates and every sign-in
+  (`authService.issueSession`, all paths) do. Blocking or removing a role closes every session of the account (and its API
+  keys); they sign in again with the roles still open. The person never adds a blocked role back (403 `role_blocked`).
 - **Anything that returns candidates goes through `peopleHandover`; any way to open a CV goes through `cvHandover`**
   (`server/src/security/handover.ts`): daily limit, strict log entry with the ids shown before the data leaves, alerts.
 - **Admin actions are logged** with `writeAudit(actorOf(req), '<area>.<verb>', target, details)`. Add new action names
@@ -113,6 +122,20 @@ One Node process: Express API (`server/`) + built React client (`client/dist`). 
   employer only); staff views through the hand-over by email; employer sees only forwarded applicants, one employer
   budget per account on every session; removing staff keeps the rest; employer-only → + candidate; staff-only still
   Google-only (12 checks; fresh DB; restart the server first — it spends 1 of the per-IP submissions).
+- `BASE=http://localhost:3100 DATABASE_URL=… node test/e2e-role-blocks.mjs` — blocking a role and employers editing every
+  field (owner, 24.11.2026): admins only (others refused, bad input), find any account by email (roles + blocks only),
+  a block closes every session and the person signs in again with the open roles (code / Google), a blocked role not
+  added back, the staff role blocked → candidate only on Google, no self-block of staff, all blocked → no sign-in (neutral,
+  logged), unblock, a blocked employer receives no forwards; the edit form carries every field, a staff-only added field
+  write-only, invalid / board fields refused, nothing applied while pending, apply settings approved only by a content
+  manager (coordinator 403), approval applies every field, empty staff-only answer = unchanged, back to the site default
+  (13 checks; fresh DB; restart the server first — it spends 1 of the per-IP submissions).
+- `BASE=http://localhost:3100 DATABASE_URL=… node test/e2e-review-fixes.mjs` — the privacy / security review of 24.11.2026:
+  a 1MB "<<<…" answer refused at once (H1), a candidate + employer's added answers saved and required ones asked (M1),
+  SMOOV (the suite's own mock, never a real one) gets a quick "yes" only for a never-removed address and every removal
+  (M2), the dedicated list key, old-key rows still honoured and re-keyed at boot (M3), a failed webhook handled on
+  Resend's retry (M4), the sandbox export without staff-only job answers (M5) (7 checks; server with SMOOV ON at the
+  mock, `SANDBOX_EXPORT_TOKEN`, `RESEND_WEBHOOK_SECRET` — values in `run-local.mjs`; fresh DB).
 - **Jobs imported from the existing site are read-only** (`jobs.imported_from_live`; 409 `job_read_only` + a DB trigger).
   Production has none since 17.11.2026 (one-time migration `2026-11-purge-imported-jobs`, owner's decision; launch.sh no
   longer imports); they exist only in local databases seeded with `importFromLive`.
@@ -188,6 +211,11 @@ One Node process: Express API (`server/`) + built React client (`client/dist`). 
   falls back to the default text. Bounces / complaints come in through the signed webhook `POST /api/webhooks/resend`
   (`RESEND_WEBHOOK_SECRET`) and suppress the address (a keyed hash only). Service mail only: marketing mail, lists and
   unsubscribe are not built yet (phases 3–4 of `docs/mail-phases-3-4.md`).
+- **The lasting address lists** (marketing removals, mail suppressions, unsubscribe links) use `security/addressKey.ts`
+  with their own `MARKETING_OPTOUT_SECRET` (never rotated, never a JWT secret); the old derived key matches old rows only.
+  Every push to a mailing list goes through `services/marketingList.ts mayPushToList` (a "yes" and not removed); every
+  removal also calls `removeFromList`. Strip tags only with a linear pattern (`/<[^<>]*>/`) and check a text's type and
+  length BEFORE any regex (security review 24.11.2026).
 - **Marketing consent** (owner 23.11.2026; `docs/marketing-consent.md`, `security/marketing.ts`, `dal/marketingDAL.ts`): each
   candidate is agreed / not agreed / removed / unknown. A removal (`marketing_optouts`, keyed hash of the address; the
   personal area's "no", the signed one-click `POST /api/unsubscribe`, staff on request, a Resend complaint) ALWAYS wins;

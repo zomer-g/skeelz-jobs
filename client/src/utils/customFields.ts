@@ -15,6 +15,8 @@ export interface CustomFieldDef extends FormField {
   form: CustomFieldForm; sortOrder: number; active: boolean; showOnJobPage: boolean;
   /** The Salesforce field it goes to (linked by an admin), or null. */
   sfField: string | null;
+  /** Sign-up questions: when an admin turned it on; null = awaiting an admin (owner, 24.11.2026). */
+  approvedAt?: string | null;
 }
 /** Whether an added field reaches Salesforce (server: settingsController salesforceStatuses). */
 export type SalesforceFieldStatus = 'not_linked' | 'missing' | 'wrong_type' | 'not_writable' | 'ok' | 'salesforce_off' | 'unknown';
@@ -71,3 +73,9 @@ export const loadPublicJobFields = (): Promise<FormField[]> => {
 };
 /** The last loaded copy (the employer form loads it on mount, before anything is sent). */
 export const getPublicJobFields = (onlyJobPage = false): FormField[] => (onlyJobPage ? publicJobFields.filter((f) => f.showOnJobPage) : publicJobFields);
+/** An employer's edit request (owner, 24.11.2026: every field): all the job form's added fields. A staff-only one (not
+ *  shown on the job page) is write-only for the employer: its stored answer is never shown, so it is never required
+ *  here and an empty answer means "leave it as it is" (the server does the same). */
+export const STAFF_ONLY_EDIT_HINT = 'התשובה השמורה לא מוצגת כאן. ממלאים רק כדי לשנות אותה.';
+export const editRequestJobFields = (): FormField[] =>
+  publicJobFields.map((f) => (f.showOnJobPage ? f : { ...f, required: false, help: f.help ? `${f.help} · ${STAFF_ONLY_EDIT_HINT}` : STAFF_ONLY_EDIT_HINT }));

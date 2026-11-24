@@ -46,8 +46,8 @@ const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"'
 /** HTML → one line of plain text, cut at a word boundary to at most `max` characters (with "…"). */
 export const plainText = (html: unknown, max = 160): string => {
   const text = String(html ?? '')
-    .replace(/<(br|\/p|\/li|\/h\d|\/div)\b[^>]*>/gi, ' ')
-    .replace(/<[^>]*>/g, '')
+    .replace(/<(br|\/p|\/li|\/h\d|\/div)\b[^<>]*>/gi, ' ')
+    .replace(/<[^<>]*>/g, '')
     .replace(/&(#\d+|#x[0-9a-f]+|[a-z]+\d*);/gi, (m, e: string) => {
       const k = e.toLowerCase();
       if (ENTITIES[k] !== undefined) return ENTITIES[k];

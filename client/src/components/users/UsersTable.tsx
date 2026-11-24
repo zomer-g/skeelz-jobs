@@ -1,6 +1,7 @@
 import { GridPaginationModel } from '@mui/x-data-grid';
 import {keyValue, userProfile } from '../../models/interfaces/Props.interfaces';
 import MarketingStatus from './MarketingStatus';
+import { RoleBlocksButton, useIsAdmin } from './RoleBlocks';
 import { i18n } from '../../i18n/I18n';
 import { formatDate, getDefaultFilenameByMime, isString } from '../../utils/utils';
 import { UploadFileService } from '../../services/api/UploadFile.service';
@@ -62,6 +63,7 @@ const UserTable: React.FC<UserTableProps> = ({
 }) => {
 
     const { initModal } = useModalStore();
+    const isAdmin = useIsAdmin(); // only admins block roles (24.11.2026)
     const [cvFilePath, setCvFilePath] = useState('');
     
     const [currUsers, setCurrUsers] = useState<userProfile[]>(users);
@@ -408,6 +410,7 @@ const UserTable: React.FC<UserTableProps> = ({
                                     {field(P.Role, ROLE_LABELS[row.role as string] ?? row.role)}
                                     {field(P.Email, row.email, true, true)}
                                     <div className="users-card__field"><dt>דיוור שיווקי</dt><dd><MarketingStatus id={row._id} name={[row.firstName, row.lastName].filter(Boolean).join(' ')} value={(row as any).marketing} readOnly={readOnly} onChanged={onChanged} /></dd></div>
+                                    {isAdmin && <div className="users-card__field"><dt>חסימת תפקידים</dt><dd><RoleBlocksButton id={row._id} who={[row.firstName, row.lastName].filter(Boolean).join(' ')} blocked={(row as any).blockedRoles} onChanged={onChanged} /></dd></div>}
                                     {field(P.PhoneNumber, row.phoneNumber, true)}
                                     {field(translations.Register.IdNumber, row.idNumber, true)}
                                 </dl>
@@ -502,7 +505,8 @@ const UserTable: React.FC<UserTableProps> = ({
                                     <td title={row.email}><span dir="ltr" className="users-table__clip users-table__email">{row.email}</span></td>
                                     <td><span dir="ltr">{row.phoneNumber}</span></td>
                                     <td><span dir="ltr">{row.idNumber || '—'}</span></td>
-                                    <td><MarketingStatus id={row._id} name={name} value={(row as any).marketing} readOnly={readOnly} onChanged={onChanged} /></td>
+                                    <td><MarketingStatus id={row._id} name={name} value={(row as any).marketing} readOnly={readOnly} onChanged={onChanged} />
+                                        {isAdmin && <div className="mt-1"><RoleBlocksButton id={row._id} who={name} blocked={(row as any).blockedRoles} onChanged={onChanged} /></div>}</td>
                                     <td className="users-table__icon">
                                         {row.extraDetails.length > 0 && (
                                             <button type="button" className="btn" aria-label={`פרטים נוספים: ${name}`}

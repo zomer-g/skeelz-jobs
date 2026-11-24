@@ -21,7 +21,7 @@ import { mailEditRequestDecision } from '../mail/triggers.js';
 import { changesToJobUpdate, compareEditRequest, jobToEditable } from '../security/employer.js';
 import { safeErrorText } from '../security/pure.js';
 import { canManageContent } from '../models/enums.js';
-import { CONTENT_MANAGER_REQUIRED } from '../security/roleFields.js';
+import { CONTENT_MANAGER_FIELDS, CONTENT_MANAGER_REQUIRED } from '../security/roleFields.js';
 import { cleanReason, descriptionToHtml } from '../services/jobSubmissionRules.js';
 import * as customFields from '../services/customFieldsService.js';
 import { asCustomValues, checkCustomValues, CustomValue } from '../models/schemas/customFields.js';
@@ -34,7 +34,8 @@ const extraComparison = async (changes: any, base: any, jobCustom: unknown) => {
   const cur = asCustomValues(jobCustom);
   return Object.entries(asked).map(([id, requested]) => ({
     field: `customFields.${id}`, label: defs.get(id)?.label ?? id, base: base?.customFields?.[id] ?? null, current: cur[id] ?? null,
-    requested, changedSince: (base?.customFields?.[id] ?? null) !== (cur[id] ?? null),
+    // A staff-only field has no base (the employer never saw its answer): nothing to compare.
+    requested, changedSince: !!base?.customFields && id in base.customFields && (base.customFields[id] ?? null) !== (cur[id] ?? null),
   }));
 };
 /** Requested answers still valid now (a field turned off or an option removed since is dropped, never refused). */
@@ -87,10 +88,12 @@ export const approve = async (req: Request, res: Response, next: NextFunction) =
   try {
     const r = await employerDAL.getEditRequest(id);
     if (!r || r.status !== 'pending') return notPending(res);
-    // A change of the threshold condition (set, changed or cleared) is approved by a content manager, not a coordinator.
-    if ('thresholdCondition' in (r.changes ?? {}) && !canManageContent(req.authUser?.role)) {
+    // A change of the threshold condition or of an apply setting (set, changed or cleared) is approved by a content
+    // manager, not a coordinator (roleFields.CONTENT_MANAGER_FIELDS; owner, 19.11 and 24.11.2026).
+    const restricted = CONTENT_MANAGER_FIELDS.filter((f) => f in (r.changes ?? {}));
+    if (restricted.length && !canManageContent(req.authUser?.role)) {
       auditDenied(req, CONTENT_MANAGER_REQUIRED);
-      return res.status(403).json({ message: 'משרה עם תנאי סף מאושרת על ידי מנהל תוכן', code: CONTENT_MANAGER_REQUIRED, fields: ['thresholdCondition'] });
+      return res.status(403).json({ message: 'שינוי של תנאי סף או של הגדרות ההגשה מאושר על ידי מנהל תוכן', code: CONTENT_MANAGER_REQUIRED, fields: restricted });
     }
     claimed = await employerDAL.claimEditRequest(id, who, 'approved');
     if (!claimed) return notPending(res);

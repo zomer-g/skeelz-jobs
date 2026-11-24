@@ -18,7 +18,8 @@ import IJobApplication from '../models/schemas/jobApplication.js';
 import { checkGuestApply, checkRegularApply, DEFAULT_APPLY_POLICY } from '../models/schemas/applyPolicy.js';
 import { CvMode, parseCvChoice, resolveApplicationCv } from './applicationCv.js';
 import { query } from '../config/db.js';
-import { mayAddToMailingList, TERMS_VERSION } from '../security/consent.js';
+import { TERMS_VERSION } from '../security/consent.js';
+import { mayPushToList } from './marketingList.js';
 import { guestAlreadyApplied, storeGuestApplication } from './guestApplications.js';
 import { thresholdConditionOf, thresholdRecord, thresholdRefusal } from '../models/schemas/thresholdCondition.js';
 import { ThresholdNotConfirmedError, assertCandidateEditable, assertJobTakesApplications } from '../middleware/errorMiddleware.js';
@@ -157,8 +158,9 @@ export const guestApplyJob = async (jobRef: Partial<Job> ,guestData: Guest, cons
    const stored = await storeGuestApplication(guest, String(jobData._id), thresholdRecord(jobData.thresholdCondition, thresholdConfirmed));
    await recordGuestConsent(guest._id, String(jobData._id), guest.email, consent.marketing);
    await queueSalesforce('guest_application', stored.id);
-   // The mailing list gets only guests who ticked the marketing box.
-   if (appConfig.smoove.enableSmoove && mayAddToMailingList(consent.marketing)) {
+   // The mailing list gets only guests who ticked the marketing box AND whose address is not on the removal list: an
+   // unverified form never undoes a removal (security review 24.11.2026, M2).
+   if (appConfig.smoove.enableSmoove && await mayPushToList(guest.email, consent.marketing)) {
      await smooveService.ensureSmooveGuest(guestData);
     }
     await mailStaffNewApplication({ name: guest.fullName, email: guest.email, phone: guest.phoneNumber, guest: true }, jobData);

@@ -15,7 +15,7 @@
 // Every version is kept as published (server/privacy-versions/<TERMS_VERSION>.html → privacy_versions) and every
 // acceptance is recorded in consent_records (time, who, version). Bumping it: change the texts, then
 // `cd client && npm run snapshot:privacy` — server/test/privacy.test.ts fails while the page and the file differ.
-export const TERMS_VERSION = '2026-11-23-b';
+export const TERMS_VERSION = '2026-11-24';
 export const MARKETING_REQUIRED = false;
 
 export type ConsentError = 'terms_required' | 'marketing_required' | 'marketing_invalid';

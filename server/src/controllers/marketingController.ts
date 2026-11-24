@@ -10,6 +10,8 @@
  *  it. Logged with ids / keyed hashes only: marketing.removed_by_staff, marketing.unsubscribed, marketing.complaint
  *  (and user.marketing_consent_changed for the personal area).
  * ========================================================================== */
+import { addressKey } from '../security/addressKey.js';
+import { removeFromList } from '../services/marketingList.js';
 import { NextFunction, Request, Response } from 'express';
 import { queryOne } from '../config/db.js';
 import * as marketingDAL from '../dal/marketingDAL.js';
@@ -44,7 +46,8 @@ export const removeCandidate = async (req: Request, res: Response, next: NextFun
     if (!view) return res.status(404).json({ message: 'Not found', code: 'not_found' });
     const by = actorOf(req);
     const row = await queryOne<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [id]);
-    await marketingDAL.recordRemoval({ key: emailKey(row!.email), userId: id }, 'staff', by);
+    await marketingDAL.recordRemoval({ key: addressKey(row!.email), userId: id }, 'staff', by);
+    void removeFromList(row!.email); // SMOOV too, when on (services/marketingList.ts)
     await writeAuditStrict(by, 'marketing.removed_by_staff', `user:${id}`, { before: view.status });
     res.json({ data: { status: 'removed' } });
   } catch (e) { next(e); }
@@ -56,9 +59,10 @@ export const removeAddress = async (req: Request, res: Response, next: NextFunct
     const email = normalizeEmail(req.body?.email);
     if (!isValidEmail(email)) return res.status(400).json({ message: 'A valid email is required', code: 'bad_request' });
     const by = actorOf(req);
-    const key = emailKey(email);
+    const key = addressKey(email);
     const userId = await marketingDAL.candidateIdByEmail(email);
     await marketingDAL.recordRemoval({ key, userId }, 'staff', by);
+    void removeFromList(email);
     await writeAuditStrict(by, 'marketing.removed_by_staff', userId ? `user:${userId}` : keyRef(key), { by_address: true });
     res.json({ data: { status: 'removed' } });
   } catch (e) { next(e); }
@@ -77,6 +81,8 @@ export const unsubscribe = async (req: Request, res: Response, next: NextFunctio
     // The account only if its address still gives the same key (the address may have changed since).
     const userId = p.u && (await marketingDAL.userHasKey(p.u, p.k)) ? p.u : null;
     await marketingDAL.recordRemoval({ key: p.k, userId }, 'link', 'link:unsubscribe');
+    // SMOOV too when the link names an account (a link without one holds only the hash: no address to send).
+    if (userId) void queryOne<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId]).then((r) => removeFromList(r?.email));
     void writeAudit(`anonymous:${req.ip ?? ''}`, 'marketing.unsubscribed', userId ? `user:${userId}` : keyRef(p.k), null);
     res.setHeader('Cache-Control', 'no-store');
     res.json({ data: { status: 'removed' } });
@@ -85,8 +91,9 @@ export const unsubscribe = async (req: Request, res: Response, next: NextFunctio
 
 /** A spam complaint about any email (Resend webhook): the address is also removed from marketing. */
 export const removeByComplaint = async (address: string, emailId: string | null) => {
-  const key = emailKey(address);
+  const key = addressKey(address);
   const userId = await marketingDAL.candidateIdByEmail(address);
   await marketingDAL.recordRemoval({ key, userId }, 'complaint', 'system:resend');
+  void removeFromList(address);
   void writeAudit('system:resend', 'marketing.complaint', userId ? `user:${userId}` : keyRef(key), { email_id: emailId });
 };

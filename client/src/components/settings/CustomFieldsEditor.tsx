@@ -20,6 +20,11 @@ const SF_LINK_ERRORS: Record<string, string> = {
   sf_field_reserved: 'האתר כבר כותב לשדה הזה. בחרו שדה אחר.',
   sf_field_taken: 'שדה אחר בטופס הזה כבר מקושר לשדה הזה ב-Salesforce.',
 };
+/** Sign-up questions (owner, 24.11.2026): never ask about sensitive matters; an admin turns each one on. */
+export const SENSITIVE_WARNING = 'אל תשאלו על מידע רגיש: בריאות או מוגבלות, דת, מוצא, דעות פוליטיות, נטייה מינית, עבר פלילי, מצב כלכלי או משפחתי. '
+  + 'שאלה כזו משנה את רמת ההגנה הנדרשת על המאגר. כל שאלה חדשה בטופס ההרשמה (וכל שינוי בנוסח שלה) נכנסת לטופס רק אחרי שמנהל/ת מערכת מאשר/ת ומפעיל/ה אותה.';
+const awaitingAdmin = (f: CustomFieldDef) => f.form === 'signup' && !f.active && !f.approvedAt;
+
 export type SalesforceInfo = { enabled: boolean; status: Record<string, SalesforceFieldStatus> };
 /** Active fields of this form that don't reach Salesforce (for the section's summary warning). */
 export const unsentCount = (fields: CustomFieldDef[], form: CustomFieldForm, sf?: SalesforceInfo) =>
@@ -27,6 +32,7 @@ export const unsentCount = (fields: CustomFieldDef[], form: CustomFieldForm, sf?
 
 const TYPE_LABELS: Record<CustomFieldType, string> = { text: 'טקסט חופשי', select: 'בחירה מרשימה', checkbox: 'תיבת סימון (כן)' };
 const ERRORS: Record<string, string> = {
+  admin_approval_required: 'רק מנהל/ת מערכת מפעיל/ה שאלה בטופס ההרשמה.',
   bad_label: 'שם השדה צריך להיות 2–80 תווים.',
   bad_options: 'ברשימה צריכות להיות לפחות 2 אפשרויות שונות (שורה לכל אפשרות, עד 80 תווים כל אחת).',
   bad_help: 'ההסבר ארוך מדי.',
@@ -76,7 +82,7 @@ export default function CustomFieldsEditor({ form, fields, onChanged, title, int
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ tone: 'ok' | 'alert'; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ tone: 'ok' | 'alert' | 'warn'; text: string } | null>(null);
   const [formError, setFormError] = useState('');
   const h = `cf-${form}-h`;
 
@@ -98,11 +104,15 @@ export default function CustomFieldsEditor({ form, fields, onChanged, title, int
       ...(form === 'job' ? { showOnJobPage: draft.showOnJobPage } : {}),
     };
     try {
-      if (editing) await api(`/admin/settings/custom-fields/${editing.id}`, { method: 'PATCH', body: JSON.stringify(body) });
-      else await api('/admin/settings/custom-fields', { method: 'POST', body: JSON.stringify({ ...body, form, type: draft.type }) });
+      const r = editing ? await api(`/admin/settings/custom-fields/${editing.id}`, { method: 'PATCH', body: JSON.stringify(body) })
+        : await api('/admin/settings/custom-fields', { method: 'POST', body: JSON.stringify({ ...body, form, type: draft.type }) });
       await onChanged();
       setOpen(false);
-      setMsg({ tone: 'ok', text: editing ? `השדה "${draft.label.trim()}" עודכן.` : `השדה "${draft.label.trim()}" נוסף לטופס.` });
+      // A content manager's new / reworded sign-up question waits for an admin (the server decides).
+      const waits = !!r?.awaitingAdmin;
+      setMsg({ tone: waits ? 'warn' : 'ok', text: waits
+        ? `השדה "${draft.label.trim()}" נשמר וממתין לאישור של מנהל/ת מערכת. עד אז הוא לא מוצג בטופס ההרשמה.`
+        : editing ? `השדה "${draft.label.trim()}" עודכן.` : `השדה "${draft.label.trim()}" נוסף לטופס.` });
     } catch (err) {
       setFormError(fail(err));
     } finally {
@@ -152,6 +162,7 @@ export default function CustomFieldsEditor({ form, fields, onChanged, title, int
         </button>
       </div>
       <p className="sec-muted mb-2">{intro}</p>
+      {form === 'signup' && <p role="note" className="sec-note mb-2" data-testid="custom-fields-signup-sensitive"><i className="bi bi-shield-exclamation" aria-hidden="true" /> {SENSITIVE_WARNING}</p>}
       {unsent > 0 && (
         <p role="note" className="sec-note mb-2" data-testid={`custom-fields-${form}-sf-summary`}>
           <i className="bi bi-exclamation-circle-fill" aria-hidden="true" /> {unsent === 1 ? 'שדה פעיל אחד' : `${unsent} שדות פעילים`} בטופס הזה: {SF_NOT_SENT}.
@@ -178,7 +189,7 @@ export default function CustomFieldsEditor({ form, fields, onChanged, title, int
                   {form === 'job' && <div className="sec-muted">{f.showOnJobPage ? 'מוצג בעמוד המשרה' : 'לצוות בלבד'}</div>}
                 </td>
                 <td data-label="מצב">
-                  {f.active ? <Chip tone="ok">פעיל</Chip> : <Chip tone="muted">כבוי</Chip>}
+                  {f.active ? <Chip tone="ok">פעיל</Chip> : awaitingAdmin(f) ? <Chip tone="warn">ממתין לאישור מנהל/ת מערכת</Chip> : <Chip tone="muted">כבוי</Chip>}
                   {f.active && <div className="mt-1">{sfLine(f)}</div>}
                 </td>
                 <td><div className="sec-actions">
@@ -197,9 +208,10 @@ export default function CustomFieldsEditor({ form, fields, onChanged, title, int
                     <button type="button" className="sec-btn sec-btn--danger" disabled={busy} aria-label={`כיבוי: ${f.label}`}
                       onClick={() => window.confirm(`לכבות את השדה "${f.label}"? הוא לא יוצג בטופס, והתשובות שכבר נשמרו יישארו גלויות לצוות.`)
                         && patch(f, { active: false }, `השדה "${f.label}" כובה.`)}>כיבוי</button>
-                  ) : (
-                    <button type="button" className="sec-btn" disabled={busy} aria-label={`הפעלה: ${f.label}`}
-                      onClick={() => patch(f, { active: true }, `השדה "${f.label}" הופעל.`)}>הפעלה</button>
+                  ) : form === 'signup' && !isAdmin ? null : (
+                    <button type="button" className="sec-btn" disabled={busy} aria-label={`${awaitingAdmin(f) ? 'אישור והפעלה' : 'הפעלה'}: ${f.label}`}
+                      onClick={() => (!awaitingAdmin(f) || window.confirm(`לאשר את השאלה "${f.label}" ולהפעיל אותה בטופס ההרשמה? ודאו שאינה שואלת על מידע רגיש.`))
+                        && patch(f, { active: true }, `השדה "${f.label}" הופעל.`)}>{awaitingAdmin(f) ? 'אישור והפעלה' : 'הפעלה'}</button>
                   )}
                 </div></td>
               </tr>
@@ -231,6 +243,7 @@ export default function CustomFieldsEditor({ form, fields, onChanged, title, int
 
       <Dialog open={open} title={editing ? `עריכת שדה: ${editing.label}` : 'הוספת שדה'} onClose={() => setOpen(false)}>
         <form onSubmit={save} noValidate>
+          {form === 'signup' && <p role="note" className="sec-note">{SENSITIVE_WARNING}</p>}
           <label className="sec-field">
             <span>שם השדה (כפי שיופיע בטופס)</span>
             <input className="form-control" required minLength={2} maxLength={80} value={draft.label}

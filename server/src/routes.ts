@@ -22,6 +22,7 @@ import { UpdateJobDto } from './dto/updateJobDto.js';
 import * as SyncController from './controllers/syncController.js';
 import * as SecurityController from './controllers/securityController.js';
 import * as StaffController from './controllers/staffController.js';
+import * as RoleBlocksController from './controllers/roleBlocksController.js';
 import * as SettingsController from './controllers/settingsController.js';
 import * as MailController from './controllers/mailController.js';
 import * as MarketingController from './controllers/marketingController.js';
@@ -289,6 +290,11 @@ router.patch('/admin/staff/:userId/role', adminOnly, StaffController.setRole);
 router.post('/admin/staff/:userId/deactivate', adminOnly, StaffController.deactivate);
 router.post('/admin/staff/:userId/activate', adminOnly, StaffController.activate);
 router.post('/admin/staff/:userId/revoke-sessions', adminOnly, StaffController.revokeSessions);
+// Blocking a role of an account, one by one (owner, 24.11.2026: candidate / employer / staff): admins only; a block
+// closes every session of the account. Roles and blocks only, never the person's data (roleBlocksController).
+router.get('/admin/role-blocks', adminOnly, RoleBlocksController.findByEmail);
+router.get('/admin/role-blocks/:userId', adminOnly, RoleBlocksController.get);
+router.put('/admin/role-blocks/:userId/:role', adminOnly, RoleBlocksController.set);
 
 // Internal API tokens: admins only (owner, 20.11.2026): list, create and revoke, on the security screen.
 // The handler also checks the DB role (issuableScopes) so a key's scopes always match an admin issuer.

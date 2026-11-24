@@ -125,13 +125,21 @@ await check('bad definitions refused with a code (label, options, unknown key, t
   }
 });
 
-await check('a content manager adds sign-up questions (text required, list, checkbox); the admin can too; the public form gets definitions only', async () => {
+await check('a content manager adds sign-up questions (text required, list, checkbox) — asked only once an ADMIN turns them on; the admin own ones at once; the public form gets definitions only', async () => {
   const a = await create({ form: 'signup', label: 'מאיפה שמעת עלינו?', type: 'text', required: true, help: 'במילים שלך' });
   assert.equal(a.status, 201, a.text);
   REQ_TEXT = a.json.data.field.id; added.push(REQ_TEXT);
   const b = await create({ form: 'signup', label: 'משמרת מועדפת', type: 'select', options: ['בוקר', 'ערב', 'לילה'] });
   assert.equal(b.status, 201, b.text);
   OPT_SELECT = b.json.data.field.id; added.push(OPT_SELECT);
+  // Owner, 24.11.2026 (security review M6): a content manager's sign-up question waits for an admin.
+  assert.equal(a.json.data.awaitingAdmin, true);
+  assert.equal(a.json.data.field.active, false);
+  assert.ok(!(await jar().req('GET', '/api/custom-fields/signup')).json.data.fields.some((f) => f.id === REQ_TEXT), 'not asked yet');
+  const self = await patch(REQ_TEXT, { active: true });
+  assert.equal(self.status, 403, self.text);
+  assert.equal(self.json.code, 'admin_approval_required');
+  for (const id of [REQ_TEXT, OPT_SELECT]) assert.equal((await patch(id, { active: true }, admin)).status, 200, 'the admin approves');
   const c = await create({ form: 'signup', label: 'יש לי רישיון נהיגה', type: 'checkbox' }, admin);
   assert.equal(c.status, 201, c.text);
   OPT_CHECK = c.json.data.field.id; added.push(OPT_CHECK);
@@ -143,6 +151,15 @@ await check('a content manager adds sign-up questions (text required, list, chec
   assert.deepEqual(mine[1].options, ['בוקר', 'ערב', 'לילה']);
   const list = (await cm.req('GET', '/api/admin/settings/custom-fields')).json.data.fields;
   assert.ok(list.find((f) => f.id === REQ_TEXT)?.active === true);
+  assert.ok(list.find((f) => f.id === REQ_TEXT)?.approvedAt, 'approval recorded');
+  const ap = await db.query(`SELECT actor FROM audit_log WHERE action = 'settings.custom_field_approved' AND target = $1`, [`custom_field:${REQ_TEXT}`]);
+  assert.equal(ap.rows[0]?.actor, ADMIN_EMAIL);
+  // A content manager's rewording turns it off until an admin approves the new wording.
+  const re = await patch(OPT_SELECT, { label: 'משמרת מועדפת (מעודכן)' });
+  assert.equal(re.status, 200, re.text);
+  assert.equal(re.json.data.awaitingAdmin, true);
+  assert.equal(re.json.data.field.active, false);
+  assert.equal((await patch(OPT_SELECT, { label: 'משמרת מועדפת', active: true }, admin)).status, 200);
 });
 
 const cand = jar();
@@ -210,6 +227,8 @@ await check('a new required question asks existing candidates to complete their 
   const r = await create({ form: 'signup', label: 'שאלה חדשה', type: 'text', required: true });
   assert.equal(r.status, 201);
   const id = r.json.data.field.id; added.push(id);
+  assert.equal((await cand.req('GET', '/api/users/me')).json.data.profileIncomplete, false, 'not asked before an admin approves');
+  assert.equal((await patch(id, { active: true }, admin)).status, 200);
   assert.equal((await cand.req('GET', '/api/users/me')).json.data.profileIncomplete, true);
   assert.equal((await cand.req('PATCH', '/api/users/me', { customFields: { [id]: 'עכשיו עניתי' } })).status, 200);
   assert.equal((await cand.req('GET', '/api/users/me')).json.data.profileIncomplete, false);
@@ -230,7 +249,9 @@ await check('turned off, never deleted: not asked, not accepted, the answer kept
   const list = (await cm.req('GET', `/api/users?usersFilter[inputValue]=${encodeURIComponent(CAND)}&usersFilter[limit]=9`)).json.data.users;
   assert.deepEqual(list.find((x) => x.email === CAND).extraDetails.find((x) => x.id === OPT_SELECT), { id: OPT_SELECT, label: 'משמרת מועדפת', value: 'בוקר', active: false });
   await assert.rejects(db.query(`DELETE FROM custom_fields WHERE id = $1`, [OPT_SELECT]), /never deleted/);
-  assert.equal((await patch(OPT_SELECT, { active: true, label: 'משמרת' })).status, 200, 'back on, renamed');
+  // Back on is an admin's (owner, 24.11.2026): the content manager is refused.
+  assert.equal((await patch(OPT_SELECT, { active: true })).json?.code, 'admin_approval_required');
+  assert.equal((await patch(OPT_SELECT, { active: true, label: 'משמרת' }, admin)).status, 200, 'back on, renamed');
 });
 
 let JOB;
@@ -306,7 +327,8 @@ await check('the activity log: definitions by id and key names; answers never; c
   assert.equal(created.rows.length, added.length);
   assert.ok(created.rows.every((r) => ['signup', 'job'].includes(r.details.form) && typeof r.details.label === 'string'));
   const upd = await db.query(`SELECT details FROM audit_log WHERE action = 'settings.custom_field_updated' AND target = $1 ORDER BY id`, [`custom_field:${OPT_SELECT}`]);
-  assert.deepEqual(upd.rows.map((r) => r.details.changed), [['active'], ['label', 'active']]);
+  // approved (admin) · reworded by the content manager (off again) · re-approved · off · back on renamed (admin)
+  assert.deepEqual(upd.rows.map((r) => r.details.changed), [['active'], ['label', 'active'], ['label', 'active'], ['active'], ['label', 'active']]);
   const leak = await db.query(`SELECT count(*)::int AS n FROM audit_log WHERE details::text LIKE '%' || $1 || '%' OR details::text LIKE '%' || $2 || '%' OR details::text LIKE '%' || $3 || '%'`,
     [SECRET, JOB_PRIVATE, JOB_PUBLIC]);
   assert.equal(leak.rows[0].n, 0, 'an answer is in the activity log');
@@ -358,7 +380,9 @@ await check('edit request: only the fields shown on the job page, their answers 
   assert.equal(clear.status, 400, 'a required one is not cleared');
   const req = await emp.req('POST', `/api/employer/jobs/${EMP_JOB}/edit-requests`, { customFields: { [JOB_REQ]: 'שכר חדש', [JOB_HIDDEN]: 'employer tries' } });
   assert.equal(req.status, 201, req.text);
-  assert.deepEqual(req.json.data.fields, [`customFields.${JOB_REQ}`], 'the staff-only field is dropped');
+  // Owner, 24.11.2026: every field — a staff-only one too, write-only for the employer (never shown back, never compared).
+  assert.deepEqual([...req.json.data.fields].sort(), [`customFields.${JOB_HIDDEN}`, `customFields.${JOB_REQ}`].sort());
+  assert.ok(!(await emp.req('GET', '/api/employer/edit-requests')).text.includes(JOB_PRIVATE), 'the stored staff-only answer is never in the employer list');
   assert.equal((await jar().req('GET', `/api/jobs/${EMP_JOB}`)).json.data.extraFields[0].value, JOB_PUBLIC, 'the live job is unchanged while pending');
   const view = await cm.req('GET', `/api/admin/job-edit-requests/${req.json.data.id}`);
   const row = view.json.data.comparison.find((c) => c.field === `customFields.${JOB_REQ}`);
@@ -366,10 +390,10 @@ await check('edit request: only the fields shown on the job page, their answers 
   const ap = await co.req('POST', `/api/admin/job-edit-requests/${req.json.data.id}/approve`, {});
   assert.equal(ap.status, 200, `a coordinator approves an added-field change: ${ap.text}`);
   const { rows: [j] } = await db.query(`SELECT custom_fields FROM jobs WHERE id = $1`, [EMP_JOB]);
-  assert.deepEqual(j.custom_fields, { [JOB_REQ]: 'שכר חדש', [JOB_HIDDEN]: JOB_PRIVATE });
+  assert.deepEqual(j.custom_fields, { [JOB_REQ]: 'שכר חדש', [JOB_HIDDEN]: 'employer tries' });
   await settle();
   const log = await db.query(`SELECT details FROM audit_log WHERE action = 'jobs.edit_request_approved' AND target = $1`, [req.json.data.id]);
-  assert.deepEqual(log.rows[0].details.fields, [`customFields.${JOB_REQ}`]);
+  assert.deepEqual([...log.rows[0].details.fields].sort(), [`customFields.${JOB_HIDDEN}`, `customFields.${JOB_REQ}`].sort());
   const leak = await db.query(`SELECT count(*)::int AS n FROM audit_log WHERE details::text LIKE '%שכר חדש%'`);
   assert.equal(leak.rows[0].n, 0);
 });

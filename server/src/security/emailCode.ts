@@ -111,11 +111,14 @@ export const requestRefusal = (recent: (Date | string)[], now: Date = new Date()
 /** Why no code is sent to an address that exists (the answer to the visitor stays the same). An account with only
  *  staff roles gets none (staff sign in with Google only); one that also holds a candidate or employer role does: that
  *  session carries only those roles (pure.ts effectiveRoles, several roles per account since 23.11.2026). */
-export const sendRefusal = (user: { role?: string | null; roles?: readonly string[] | null; deactivated?: boolean } | null, isStaff: (r: string | null | undefined) => boolean): 'staff' | 'deactivated' | null => {
+export const sendRefusal = (user: { role?: string | null; roles?: readonly string[] | null; deactivated?: boolean; blocked?: boolean } | null,
+  isStaff: (r: string | null | undefined) => boolean): 'staff' | 'deactivated' | 'blocked' | null => {
   if (!user) return null;
   const roles = user.roles?.length ? user.roles : [user.role];
   if (roles.every((r) => isStaff(r))) return 'staff';
   if (user.deactivated) return 'deactivated';
+  // Every role a code may carry (candidate / employer) is blocked by an admin (24.11.2026).
+  if (user.blocked) return 'blocked';
   return null;
 };
 

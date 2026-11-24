@@ -2,7 +2,7 @@
 // Own details, own submissions, own published jobs, edit requests (pending until a content manager approves; the
 // job on the board doesn't change before that). Jobs imported from the existing site are shown read-only.
 // "מועמדים למשרות שלי" (EmployerApplicants): only the applicants the SKEELZ team forwarded — name + CV.
-import { getPublicJobFields, valuesToSend } from '../../utils/customFields';
+import { editRequestJobFields, getPublicJobFields, valuesToSend } from '../../utils/customFields';
 import React, { useEffect, useRef, useState } from 'react';
 import { i18n } from '../../i18n/I18n';
 import useLanguageStore from '../../store/Language.store';
@@ -11,7 +11,7 @@ import { ClientRoutes } from '../../i18n/ClientRoutes.enum';
 import { isCandidateUser } from '../../i18n/General.enums';
 import SubmissionFields, { EMPTY_VALUES, ErrorSummary, Errors, SubmissionValues, validate } from './SubmissionFields';
 import { DetailsFields, EmployerDetails, checkDetails } from './EmployerSignUp';
-import { ApiError, EditableValues, api, fmtDate } from './employerApi';
+import { ApiError, EditableValues, JOB_EXTRA_FIELDS, JobExtraValues, api, extraLabel, extraOf, fmtDate } from './employerApi';
 import EmployerApplicants from './EmployerApplicants';
 
 type Me = { id: string; email: string; firstName: string; lastName: string; companyName: string; phone: string; jobTitle: string | null; claimable: number };
@@ -29,9 +29,52 @@ const fromForm = (v: SubmissionValues) => ({
   title: v.title, companyName: v.companyName, citySymbol: Number(v.citySymbol), jobScope: v.jobScope, requiredSkills: v.requiredSkills,
   description: v.description, externalLink: v.externalLink.trim(), publicEmail: v.publicEmail.trim(),
   thresholdCondition: (v.thresholdCondition ?? '').trim(),
-  // The added job fields: every one ('' / false = no answer); the server keeps only the ones that changed.
-  ...(getPublicJobFields(true).length ? { customFields: valuesToSend(getPublicJobFields(true), v.customFields) } : {}),
+  // The added job fields: every one ('' / false = no answer); the server keeps only the ones that changed (a staff-only
+  // one: only a non-empty answer, never compared with the stored one, which is never shown here).
+  ...(editRequestJobFields().length ? { customFields: valuesToSend(editRequestJobFields(), v.customFields) } : {}),
 });
+
+/** The job's public contact, its status and apply settings (owner, 24.11.2026: an employer may ask to change every
+ *  field; a change of the apply settings or the threshold condition is approved by a content manager). */
+const JobExtraFields: React.FC<{ values: JobExtraValues; disabled: boolean; errors: Record<string, string>; onChange: (p: Partial<JobExtraValues>) => void }> = ({ values, disabled, errors, onChange }) => {
+  const ap = i18n.getTranslations().ApplyPolicy;
+  const err = (k: string) => (errors[k]
+    ? <div id={`emp-edit-${k}-err`} className="small text-danger">{errors[k] === 'too_short' ? 'קצר מדי' : errors[k] === 'too_long' ? 'ארוך מדי' : 'לא תקין'}</div>
+    : null);
+  const text = (k: 'contactPersonName' | 'contactPersonPhone', type: string) => (
+    <div className="col-md-6 px-2 mb-3">
+      <label htmlFor={`emp-edit-${k}`} className="form-label">{extraLabel(k, ap)}</label>
+      <input id={`emp-edit-${k}`} type={type} className="form-control" value={values[k]} disabled={disabled} dir={type === 'tel' ? 'ltr' : undefined}
+        aria-invalid={!!errors[k] || undefined} aria-describedby={errors[k] ? `emp-edit-${k}-err` : undefined}
+        onChange={(e) => onChange({ [k]: e.target.value } as Partial<JobExtraValues>)} />
+      {err(k)}
+    </div>
+  );
+  const select = (k: 'status' | 'guestModeOverride' | 'quickCvOverride' | 'regularCvOverride', options: [string, string][]) => (
+    <div className="col-md-6 px-2 mb-3">
+      <label htmlFor={`emp-edit-${k}`} className="form-label">{extraLabel(k, ap)}</label>
+      <select id={`emp-edit-${k}`} className="form-select" value={values[k]} disabled={disabled}
+        onChange={(e) => onChange({ [k]: e.target.value } as Partial<JobExtraValues>)}>
+        {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+      {err(k)}
+    </div>
+  );
+  return (
+    <fieldset className="border rounded-3 p-3 mb-3">
+      <legend className="fs-6 font-RubikBold float-none w-auto px-2">פרטי קשר, מצב המשרה ואופן ההגשה</legend>
+      <p className="small text-muted">{ap.ContactPublicHint} שינוי של אופן ההגשה או של תנאי הסף מאושר על ידי מנהל/ת תוכן ב-SKEELZ.</p>
+      <div className="row">
+        {text('contactPersonName', 'text')}
+        {text('contactPersonPhone', 'tel')}
+        {select('status', [['Active', 'פעילה'], ['Suspended', 'מושהית'], ['Closed', 'סגורה (המשרה אוישה)']])}
+        {select('guestModeOverride', [['', ap.Inherit], ['self', ap.ModeSelf], ['quick', ap.ModeQuick], ['none', ap.ModeNone]])}
+        {select('quickCvOverride', [['', ap.Inherit], ['required', ap.CvRequired], ['optional', ap.CvOptional]])}
+        {select('regularCvOverride', [['', ap.Inherit], ['required', ap.CvRequired], ['optional', ap.CvOptional]])}
+      </div>
+    </fieldset>
+  );
+};
 
 const Badge: React.FC<{ kind: 'ok' | 'wait' | 'no' | 'muted'; children: React.ReactNode }> = ({ kind, children }) => (
   <span className={`badge rounded-pill ${kind === 'ok' ? 'text-bg-success' : kind === 'wait' ? 'text-bg-warning' : kind === 'no' ? 'text-bg-danger' : 'text-bg-secondary'}`}>{children}</span>
@@ -49,7 +92,7 @@ const EmployerArea: React.FC = () => {
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [editingMe, setEditingMe] = useState<EmployerDetails | null>(null);
   const [meBad, setMeBad] = useState<Partial<Record<keyof EmployerDetails, string>>>({});
-  const [editing, setEditing] = useState<{ job: Job; values: SubmissionValues; original: SubmissionValues } | null>(null);
+  const [editing, setEditing] = useState<{ job: Job; values: SubmissionValues; original: SubmissionValues; extra: JobExtraValues; originalExtra: JobExtraValues } | null>(null);
   const [note, setNote] = useState('');
   const [errors, setErrors] = useState<Errors>({});
   const [busy, setBusy] = useState(false);
@@ -103,7 +146,8 @@ const EmployerArea: React.FC = () => {
   const openEdit = (job: Job) => act(async () => {
     const d = await api<{ values: EditableValues; readOnly: boolean }>(`/employer/jobs/${job.id}`);
     const v = toForm(d.values);
-    setEditing({ job, values: v, original: v }); setErrors({}); setNote('');
+    const x = extraOf(d.values);
+    setEditing({ job, values: v, original: v, extra: x, originalExtra: x }); setErrors({}); setNote('');
   });
 
   const sendEdit = () => act(async () => {
@@ -115,6 +159,9 @@ const EmployerArea: React.FC = () => {
     const changed: Record<string, unknown> = {};
     for (const k of Object.keys(now) as (keyof typeof now)[]) {
       if (JSON.stringify(now[k]) !== JSON.stringify(before[k])) changed[k] = now[k];
+    }
+    for (const k of JOB_EXTRA_FIELDS) {
+      if (editing.extra[k].trim() !== editing.originalExtra[k].trim()) changed[k] = editing.extra[k].trim();
     }
     if (!Object.keys(changed).length) { setMessage({ kind: 'error', text: t.NoChanges }); return; }
     await api(`/employer/jobs/${editing.job.id}/edit-requests`, { method: 'POST', body: JSON.stringify({ ...changed, ...(note.trim() ? { note } : {}) }) });
@@ -139,6 +186,7 @@ const EmployerArea: React.FC = () => {
   const fieldLabel = (k: string) => (({ title: tf.JobTitle, companyName: tf.CompanyName, citySymbol: tf.City, jobScope: tf.JobScope,
     requiredSkills: tf.Skills, description: tf.Description, externalLink: tf.ExternalLink, publicEmail: tf.PublicEmail,
     thresholdCondition: i18n.getTranslations().Threshold.Label, customFields: tf.ExtraSection } as Record<string, string>)[k]
+    ?? extraLabel(k, i18n.getTranslations().ApplyPolicy)
     ?? (k.startsWith('customFields.') ? getPublicJobFields().find((f) => `customFields.${f.id}` === k)?.label ?? tf.ExtraSection : k));
 
   const card = 'border rounded-4 p-3 p-md-4 mb-4 bg-white';
@@ -178,6 +226,8 @@ const EmployerArea: React.FC = () => {
                 <ErrorSummary errors={errors} prefix="emp-edit" />
                 <SubmissionFields prefix="emp-edit" values={editing.values} errors={errors} disabled={busy} showContact={false} onlyJobPageExtra
                   onChange={(p) => setEditing({ ...editing, values: { ...editing.values, ...p } })} />
+                <JobExtraFields values={editing.extra} disabled={busy} errors={errors as Record<string, string>}
+                  onChange={(p) => setEditing({ ...editing, extra: { ...editing.extra, ...p } })} />
                 <div className="mb-3">
                   <label htmlFor="emp-edit-note" className="form-label">{t.Note}</label>
                   <textarea id="emp-edit-note" className="form-control" rows={2} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} disabled={busy} />

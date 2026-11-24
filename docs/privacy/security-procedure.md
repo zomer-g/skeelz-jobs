@@ -2,7 +2,7 @@
 
 <!-- Generated from client/src/components/privacy/privacyTexts.ts — edit there, then: cd server && npx tsx ../docs/privacy/build-docs.ts -->
 
-עודכן ב-23.11.2026. לפי תקנה 4 לתקנות הגנת הפרטיות (אבטחת מידע), התשע"ז-2017. הנוהל חל על כל מי שעובד עם המאגר. מוצג גם בעמוד `/privacy#security-procedure`.
+עודכן ב-24.11.2026. לפי תקנה 4 לתקנות הגנת הפרטיות (אבטחת מידע), התשע"ז-2017. הנוהל חל על כל מי שעובד עם המאגר. מוצג גם בעמוד `/privacy#security-procedure`.
 
 ## הרשאות
 

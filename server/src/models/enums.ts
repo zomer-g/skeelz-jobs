@@ -64,6 +64,32 @@ export const canViewStaffData = (role: string | undefined | null): boolean => VI
 export const STAFF_ROLES: readonly UserRole[] = [UserRole.ADMIN, UserRole.CONTENT_MANAGER, UserRole.PLACEMENT_COORDINATOR];
 export const isStaffRole = (role: string | undefined | null): boolean => STAFF_ROLES.includes(role as UserRole);
 
+/* ---------------------------------------------------------------------------
+ *  Per-role blocks (owner, 24.11.2026; docs/security.md "Blocking a role"). An admin blocks one of the three kinds
+ *  of role of an account, one by one: 'user' (the candidate role), 'employer', 'staff' (whichever staff role it
+ *  holds). users.blocked_roles holds them. A blocked role stays in users.roles (its data stays) but counts for
+ *  nothing: gates and sign-ins use usableRolesOf, never rolesOf.
+ * ------------------------------------------------------------------------- */
+export const BLOCKABLE_ROLES = ['user', 'employer', 'staff'] as const;
+export type BlockableRole = typeof BLOCKABLE_ROLES[number];
+export const isBlockableRole = (v: unknown): v is BlockableRole => typeof v === 'string' && (BLOCKABLE_ROLES as readonly string[]).includes(v);
+/** What blocks this role: a staff role is blocked as 'staff'. */
+export const blockKeyOf = (role: string): string => (isStaffRole(role) ? 'staff' : role);
+type WithBlocks = Parameters<typeof rolesOf>[0] & { blockedRoles?: readonly string[] | null; blocked_roles?: readonly string[] | null };
+/** The blocks of an account row (blockedRoles on a user object, blocked_roles on a DB row). */
+export const blockedOf = (u: WithBlocks | null | undefined): BlockableRole[] =>
+  [...(u?.blockedRoles ?? u?.blocked_roles ?? [])].filter(isBlockableRole);
+/** The roles of an account that count: rolesOf minus the blocked ones. */
+export const usableRolesOf = (u: WithBlocks | null | undefined): UserRole[] => {
+  const blocked = blockedOf(u) as string[];
+  return rolesOf(u).filter((r) => !blocked.includes(blockKeyOf(r)));
+};
+/** The kinds of role an account holds ('staff' for its staff role), in BLOCKABLE_ROLES order. */
+export const blockableRolesHeld = (u: Parameters<typeof rolesOf>[0]): BlockableRole[] => {
+  const held = rolesOf(u).map(blockKeyOf);
+  return BLOCKABLE_ROLES.filter((k) => held.includes(k));
+};
+
 export enum JobScope {
     FULLTIME = 'FullTime',
     PARTIAL_TIME = 'PartialTime'

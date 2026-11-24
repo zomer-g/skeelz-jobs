@@ -3,11 +3,11 @@ import * as tokenUtilityService from './tokenUtilityService.js';
 import * as tokenStorageService from './tokenStorageService.js';
 import * as jobApplicationService from './jobApplicationService.js';
 import appConfig from "../config/appConfig.js";
-import { TokenType } from "../models/enums.js";
+import { TokenType, usableRolesOf } from "../models/enums.js";
 import { AxiosError } from "axios";
 import { AuthErrorCodes, AuthErrorMessages } from "../i18n/i18n.js";
 import IUser from "../models/schemas/user.js";
-import { SignInMethod } from "../security/pure.js";
+import { SignInMethod, effectiveRoles } from "../security/pure.js";
 import { query, queryOne } from "../config/db.js";
 
 // Candidates sign in with Google (xhostd SSO) or a code sent by email (controllers/emailSigninController.ts);
@@ -17,9 +17,15 @@ import { query, queryOne } from "../config/db.js";
 export const issueSession = async (user: IUser, via: SignInMethod) => {
   const userID = user._id.toString();
   // A deactivated account (staff users screen) can't sign in.
-  const state = await queryOne<{ deactivated_at: Date | null }>(`SELECT deactivated_at FROM users WHERE id = $1`, [userID]);
+  const state = await queryOne<{ deactivated_at: Date | null; roles: string[]; role: string; blocked_roles: string[] }>(
+    `SELECT deactivated_at, roles, role, blocked_roles FROM users WHERE id = $1`, [userID]);
   if (state?.deactivated_at) {
     throw new AxiosError(AuthErrorMessages.ACCOUNT_UNAVAILABLE, AuthErrorCodes.ACCOUNT_UNAVAILABLE);
+  }
+  // Per-role blocks (24.11.2026): the session must carry at least one role that is not blocked and that this sign-in
+  // method allows (staff roles: Google only). Otherwise nobody signs in — every sign-in path comes through here.
+  if (state && !effectiveRoles(usableRolesOf(state), via).length) {
+    throw new AxiosError(AuthErrorMessages.ROLES_BLOCKED, AuthErrorCodes.ROLES_BLOCKED);
   }
   const jobApplications = await jobApplicationService.findJobsApplictionByUserId(userID);
   const accessToken = tokenUtilityService.generateAccessToken({ userID, userRole: user.role, via });

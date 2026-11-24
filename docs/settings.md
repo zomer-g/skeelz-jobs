@@ -53,9 +53,11 @@ A new option there would land in a picklist that doesn't know it. So content man
     plain text (`rowToJob` `extraFields` → `toPublicJob` `extraFields`; owner, 23.11.2026).
   - The employer form (`/post-job`) and employers' edit requests (owner, 23.11.2026): the active job fields, from the public
     `GET /api/custom-fields/job` (definitions only), with the same rules — required ones on a new submission, an edit
-    request asks only for changed answers and a required one can't be cleared. An edit request covers only the fields
-    shown on the job page (their answers are public anyway): staff-only job fields are asked for a NEW job, but their
-    answers are never shown back to an employer (staff may keep notes there). A submission keeps its answers
+    request asks only for changed answers and a required one can't be cleared. Since 24.11.2026 (owner: "every field")
+    an edit request covers EVERY active job field: those shown on the job page are shown back with their answer; the
+    staff-only ones are **write-only** for the employer — asked, never shown back (staff may keep notes there), never
+    compared with the stored answer (so the reply tells nothing about it), not required, and an empty answer means
+    "leave it as it is"; no base value of theirs is kept in the request (the employer reads their requests back). A submission keeps its answers
     (`job_submissions.custom_fields`) until it is approved, then they go to the job (fields turned off or options removed
     in between are dropped). An edit request stays pending until a coordinator or content manager approves it, like every
     other change; staff see the answers with their labels in both review screens.
@@ -85,7 +87,24 @@ A new option there would land in a picklist that doesn't know it. So content man
     them (`custom_fields`, a warning). The link screen re-reads the org (the server keeps describes in memory, so after
     creating a field in Salesforce, link it — or press "קישור ובדיקה" again — to have it picked up).
 - **Privacy text:** "the form may ask additional questions the staff added, to match you to jobs; staff see the answers;
-  they don't reach employers" (`PrivacyPage.tsx`, `privacyTexts.ts`; version `2026-11-23`).
+  some go to our contact-management system too; they don't reach employers" (`PrivacyPage.tsx`, `privacyTexts.ts`;
+  version `2026-11-24`, owner's decision after the security review of 24.11.2026).
+
+## Sign-up questions need an admin (owner, 24.11.2026; security review M6)
+
+A question on the sign-up form may touch sensitive information (health or disability, religion, origin, political
+views, sexual orientation, a criminal record, money or family matters). Such a question raises the protection the
+database needs, so it must never slip in:
+- The settings screen shows a warning against such topics on the sign-up section and in the add / edit dialog.
+- **A content manager's new sign-up question is saved OFF**, marked "ממתין לאישור מנהל/ת מערכת" (`awaitingAdmin` in the
+  answer; `custom_fields.approved_at` NULL). **Only an admin turns a sign-up question on** ("אישור והפעלה"; a content
+  manager's `active: true` → 403 `admin_approval_required`, logged as `access.denied`). The admin's own new question is
+  approved at once.
+- **Rewording** (label, options, help) of a sign-up question by a content manager turns it OFF until an admin approves
+  the new wording; "required", the order and turning it off stay with content managers. An admin's change is approved.
+- Recorded: `approved_by` / `approved_at`, `settings.custom_field_approved` (field id and label), the created / updated
+  entries carry `awaiting_admin`. Questions that were on before this rule count as approved (`system:existing`).
+- Job fields are unchanged (they describe the job, not the person).
 
 ## Owner's decisions (23.11.2026)
 

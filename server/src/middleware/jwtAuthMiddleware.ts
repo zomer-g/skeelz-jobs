@@ -9,6 +9,7 @@
  *
  *  Several roles per account (owner, 23.11.2026): a gate opens when ANY of the caller's roles is allowed; staff
  *  roles count only on an xhostd SSO session (security/pure.ts effectiveRoles). Each role keeps its own limits.
+ *  A role an admin blocked (users.blocked_roles, owner 24.11.2026) counts for nothing (models/enums.ts usableRolesOf).
  *  The gates (separation of duties, see models/enums.ts UserRole):
  *    signedIn            any signed-in account (candidate or staff)
  *    staffViewers        jobs management (no settings) and viewing candidates: coordinators + content managers + admins
@@ -34,24 +35,25 @@ import { queryOne } from "../config/db.js";
 import { isObjectId } from "../utils/ids.js";
 import { auditDenied } from "../security/audit.js";
 import { effectiveRoles, issuedBeforeRevoke } from "../security/pure.js";
-import { primaryRole, rolesOf } from "../models/enums.js";
+import { primaryRole, usableRolesOf } from "../models/enums.js";
 
 
 /** role = the highest of `roles`; roles = the account's roles THIS session carries (effectiveRoles). */
 type Identity = { id: string; email: string; role: string; roles: string[] };
-type UserRow = { id: string; email: string; role: string; roles: string[] | null; deactivated_at: Date | null; sessions_revoked_at: Date | null };
+type UserRow = { id: string; email: string; role: string; roles: string[] | null; blocked_roles: string[] | null; deactivated_at: Date | null; sessions_revoked_at: Date | null };
 
 /** The account as it is in the DB now; null when missing or deactivated. */
 const loadUser = async (userID: string): Promise<UserRow | null> => {
   if (!isObjectId(userID)) return null;
   const row = await queryOne<UserRow>(
-    `SELECT id, email, role, roles, deactivated_at, sessions_revoked_at FROM users WHERE id = $1`, [userID]);
+    `SELECT id, email, role, roles, blocked_roles, deactivated_at, sessions_revoked_at FROM users WHERE id = $1`, [userID]);
   return row && !row.deactivated_at ? row : null;
 };
 
-/** The caller as this session sees them: the DB roles NOW that this sign-in method allows; null when none. */
+/** The caller as this session sees them: the DB roles NOW, minus the ones an admin blocked (usableRolesOf), that this
+ *  sign-in method allows; null when none. */
 const identityOf = (user: UserRow, via: string | undefined): Identity | null => {
-  const roles = effectiveRoles(rolesOf(user), via);
+  const roles = effectiveRoles(usableRolesOf(user), via);
   return roles.length ? { id: user.id, email: user.email, role: primaryRole(roles), roles } : null;
 };
 

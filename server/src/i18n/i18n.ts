@@ -103,6 +103,8 @@ export enum AuthErrorCodes {
     INVALID_EMAIL = 'au16',
     ACCOUNT_UNAVAILABLE = 'au17',
     EMAIL_CODE_DISABLED = 'au18',
+    /** Every role this sign-in would carry is blocked by an admin (24.11.2026). */
+    ROLES_BLOCKED = 'au19',
 }
 
 export enum AuthErrorMessages {
@@ -124,6 +126,7 @@ export enum AuthErrorMessages {
     INVALID_EMAIL = 'Invalid email address',
     ACCOUNT_UNAVAILABLE = 'This account cannot sign in',
     EMAIL_CODE_DISABLED = 'Sign-in by email code is not available yet',
+    ROLES_BLOCKED = 'This account cannot sign in this way',
 }
 
 export enum EmailErrorCodes {

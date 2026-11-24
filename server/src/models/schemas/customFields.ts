@@ -45,22 +45,29 @@ export interface CustomFieldDef {
   /** The Salesforce field it goes to (Contact for a sign-up field, the Position Case for a job field), linked by an
    *  admin; null = not sent. Sent only when the org has it as a writable field of a fitting type. */
   sfField: string | null;
+  /** Sign-up questions: when an admin turned it on (null = never, or reworded since: awaiting an admin). */
+  approvedAt?: Date | string | null;
 }
 
 /** A stored or sent answer: text / the chosen option (string), or a checkbox (boolean). */
 export type CustomValue = string | boolean;
 export type CustomValues = Record<string, CustomValue>;
 
+/** The longest raw text answer looked at (before tags are removed): twice the limit. */
+export const CUSTOM_FIELD_RAW_MAX = CUSTOM_FIELD_LIMITS.text.max * 2;
+
 export const isCustomFieldForm = (v: unknown): v is CustomFieldForm => (CUSTOM_FIELD_FORMS as readonly unknown[]).includes(v);
 const isType = (v: unknown): v is CustomFieldType => (CUSTOM_FIELD_TYPES as readonly unknown[]).includes(v);
 
+/** A tag: linear (`[^<>]`, never `[^>]`, which is quadratic on "<<<<…": one request could block the server). */
+const TAG = /<[^<>]*>/g;
 /** Plain text on one line: tags and control characters removed, spaces collapsed, trimmed. */
 export const plainLine = (v: unknown): string =>
-  typeof v === 'string' ? v.replace(/<[^>]*>/g, '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim() : '';
+  typeof v === 'string' ? v.replace(TAG, '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim() : '';
 /** Plain text that may keep line breaks (a text answer). */
 const plainText = (v: unknown): string =>
   typeof v === 'string'
-    ? v.replace(/<[^>]*>/g, '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f]+/g, ' ')
+    ? v.replace(TAG, '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f]+/g, ' ')
       .split('\n').map((l) => l.replace(/[ \t]+/g, ' ').trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim()
     : '';
 
@@ -149,8 +156,11 @@ export const checkCustomValues = (defs: readonly CustomFieldDef[], raw: unknown,
     }
     switch (d.type) {
       case 'text': {
+        // Type and size BEFORE any cleaning (security review 24.11.2026, H1): a raw answer may carry a few tags, never
+        // more than twice the limit.
+        if (typeof v !== 'string' || v.length > CUSTOM_FIELD_RAW_MAX) { bad.push(d.id); break; }
         const t = plainText(v);
-        if (typeof v !== 'string' || t.length > CUSTOM_FIELD_LIMITS.text.max) bad.push(d.id);
+        if (t.length > CUSTOM_FIELD_LIMITS.text.max) bad.push(d.id);
         else if (!t) { if (d.required) bad.push(d.id); else values[d.id] = null; }
         else values[d.id] = t;
         break;

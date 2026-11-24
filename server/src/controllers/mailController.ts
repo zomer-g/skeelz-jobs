@@ -182,8 +182,13 @@ export const resendWebhook = async (req: Request, res: Response) => {
     console.warn(`[mail] webhook refused: ${check.reason}`);
     return res.status(401).json({ message: 'Invalid signature', code: 'mail_webhook_signature' });
   }
+  const svixId = String(req.header('svix-id'));
+  let claimed = false;
   try {
-    if (!(await mail.firstDelivery(String(req.header('svix-id'))))) return res.json({ data: { duplicate: true } });
+    // One handling per message id (Resend retries). If the handling fails the id is released again (below), so the
+    // retry is handled and a complaint or bounce is never lost (security review 24.11.2026, M4).
+    if (!(await mail.firstDelivery(svixId))) return res.json({ data: { duplicate: true } });
+    claimed = true;
     let event: unknown;
     try { event = JSON.parse(raw.toString('utf8')); } catch { return res.status(400).json({ message: 'Bad JSON', code: 'bad_request' }); }
     const o = interpretEvent(event);
@@ -200,6 +205,7 @@ export const resendWebhook = async (req: Request, res: Response) => {
     res.json({ data: { ok: true } });
   } catch (e) {
     console.error('[mail] webhook failed', safeErrorText(e));
+    if (claimed) await mail.releaseDelivery(svixId).catch((x) => console.error('[mail] webhook release failed', safeErrorText(x)));
     res.status(500).json({ message: 'Webhook failed', code: 'mail_webhook_failed' });
   }
 };

@@ -12,7 +12,7 @@ import * as smooveService from './smooveService.js'
 import { convertToIsraelTimeAndStoreAsUTC} from '../utils/utils.js';
 import { CvAttachAudit, claimCvUpload } from './s3Service.js';
 import * as locationService from '../services/locationService.js';
-import { mayAddToMailingList } from '../security/consent.js';
+import { mayPushToList } from './marketingList.js';
 import { linkRemovalToNewCandidate } from '../dal/marketingDAL.js';
 
 
@@ -90,7 +90,8 @@ export const createUser = async (createUserDto: CreateUserDto, opts: { sso?: { s
   // Salesforce (when on): queued, sent in the background with retries (services/salesforceSync.ts).
   await queueSalesforce('candidate', String(createdUser.id));
   // The mailing list gets only people who ticked the marketing box (and only when SMOOV is on).
-  if (mayAddToMailingList(opts.consent.marketing)) {
+  // (after linkRemovalToNewCandidate: their own verified "yes" cleared an earlier removal; anything else keeps it).
+  if (await mayPushToList(createdUser.email, opts.consent.marketing)) {
     const location = createdUser.citySymbol > 0 ? await locationService.getLocationByCitySymbol(createdUser.citySymbol) : null;
     await smooveService.createSmooveContact(createdUser, location?.city ?? '');
   }

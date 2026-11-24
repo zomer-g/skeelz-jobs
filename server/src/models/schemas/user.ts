@@ -23,6 +23,8 @@ export interface IUser {
   role: UserRole;
   /** Every role of the account (several since 23.11.2026); `role` is the highest. */
   roles?: UserRole[];
+  /** Roles an admin blocked ('user' | 'employer' | 'staff', 24.11.2026): no gate or sign-in counts them. */
+  blockedRoles?: string[];
   cvFileUrl?: string;
   hasAppliedToJob: boolean;
   /** A candidate of the existing site (services/legacyCandidates.ts): 'mirror' = view only until the cutover. */

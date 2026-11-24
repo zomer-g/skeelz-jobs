@@ -8,7 +8,8 @@
  *  - Edit requests: which job fields an employer may ask to change, the
  *    validation (the same caps as the public form) and the old → new diff.
  * ========================================================================== */
-import { cleanText, validateSubmission, FieldErrors, SubmissionInput } from '../services/jobSubmissionRules.js';
+import { cleanText, validateSubmission, FieldErrors, SubmissionInput, SUBMISSION_FIELD_LIMITS } from '../services/jobSubmissionRules.js';
+import { CvRule, GuestMode, OVERRIDE_FIELDS, isValidOverride } from '../models/schemas/applyPolicy.js';
 import { phoneOk } from './pure.js';
 
 // ---- the setting ------------------------------------------------------------------------
@@ -87,22 +88,32 @@ export const checkEmployerProfile = (body: unknown, opts: { requireAll?: boolean
 };
 
 // ---- edit requests ------------------------------------------------------------------------
-/** Fields an employer may ask to change on one of their published jobs (the public form's job fields; never the
- *  board settings, status, dates, internal comments or the apply policy — those stay with the content managers). */
+/** Fields an employer may ask to change on one of their published jobs (owner, 24.11.2026: "every field of a job", each
+ *  change reaching the board only after staff approve): the public form's job fields, the job's public contact name and
+ *  phone, its apply settings (guest mode, CV rules: null = the site's default) and its status (Active / Suspended /
+ *  Closed). The added job fields (settings screen) come apart, as customFields. Not here — they are how SKEELZ runs the
+ *  board, not the job: pin / bump, sponsored, publish date and schedule, internal comments, archive.
+ *  A threshold condition or an apply setting is approved by a content manager only (roleFields.restrictedChanges). */
 export const EDITABLE_JOB_FIELDS = [
   'title', 'companyName', 'citySymbol', 'jobScope', 'requiredSkills', 'description', 'externalLink', 'publicEmail',
-  'thresholdCondition',
+  'thresholdCondition', 'contactPersonName', 'contactPersonPhone', 'status', ...OVERRIDE_FIELDS,
 ] as const;
 export type EditableJobField = typeof EDITABLE_JOB_FIELDS[number];
-export type EditableJobValues = Pick<SubmissionInput, EditableJobField>;
+export type EditableJobValues = Pick<SubmissionInput, 'title' | 'companyName' | 'citySymbol' | 'jobScope' | 'requiredSkills' | 'description'
+  | 'externalLink' | 'publicEmail' | 'thresholdCondition'> & {
+  contactPersonName: string | null; contactPersonPhone: string | null; status: string;
+  guestModeOverride: GuestMode | null; quickCvOverride: CvRule | null; regularCvOverride: CvRule | null;
+};
+/** The job statuses an employer may ask for. */
+export const EDITABLE_STATUSES = ['Active', 'Suspended', 'Closed'] as const;
 
 /** Job description HTML → the plain text the employer edits (the form is plain text, like /post-job). */
 export const htmlToPlainText = (html: unknown): string => {
   const s = String(html ?? '')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/(p|div|li|h[1-6])>/gi, '\n\n')
-    .replace(/<li[^>]*>/gi, '• ')
-    .replace(/<[^>]+>/g, '')
+    .replace(/<li[^<>]*>/gi, '• ')
+    .replace(/<[^<>]+>/g, '')
     .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
     .replace(/&amp;/g, '&');
   return cleanText(s, true);
@@ -112,6 +123,8 @@ export const htmlToPlainText = (html: unknown): string => {
 export const jobToEditable = (job: {
   title: string; companyName: string; citySymbol: number; jobScope?: string[]; requiredSkills?: string[];
   description: string; externalLink?: string | null; contactPersonEmail?: string | null; thresholdCondition?: string | null;
+  contactPersonName?: string | null; contactPersonPhone?: string | null; status?: string | null;
+  guestModeOverride?: GuestMode | null; quickCvOverride?: CvRule | null; regularCvOverride?: CvRule | null;
 }): EditableJobValues => ({
   title: job.title,
   companyName: job.companyName,
@@ -122,7 +135,47 @@ export const jobToEditable = (job: {
   externalLink: job.externalLink || null,
   publicEmail: job.contactPersonEmail || null,
   thresholdCondition: job.thresholdCondition || null,
+  contactPersonName: job.contactPersonName || null,
+  contactPersonPhone: job.contactPersonPhone || null,
+  status: job.status || 'Active',
+  guestModeOverride: job.guestModeOverride ?? null,
+  quickCvOverride: job.quickCvOverride ?? null,
+  regularCvOverride: job.regularCvOverride ?? null,
 });
+
+/** The fields validateSubmission doesn't know: the job's public contact, its status and apply settings.
+ *  '' / null clears a contact field or an apply setting (back to the site's default). */
+const checkExtraJobFields = (src: Record<string, unknown>): { value: Record<string, unknown>; errors: Record<string, string> } => {
+  const value: Record<string, unknown> = {};
+  const errors: Record<string, string> = {};
+  if ('contactPersonName' in src) {
+    const s = cleanText(src.contactPersonName);
+    if (!s) value.contactPersonName = null;
+    else if (s.length < SUBMISSION_FIELD_LIMITS.contactName.min) errors.contactPersonName = 'too_short';
+    else if (s.length > SUBMISSION_FIELD_LIMITS.contactName.max) errors.contactPersonName = 'too_long';
+    else if (/\d/.test(s)) errors.contactPersonName = 'invalid';
+    else value.contactPersonName = s;
+  }
+  if ('contactPersonPhone' in src) {
+    const s = cleanText(src.contactPersonPhone);
+    const digits = s.replace(/\D/g, '');
+    if (!s) value.contactPersonPhone = null;
+    else if (!/^\+?[\d\s-]+$/.test(s)) errors.contactPersonPhone = 'invalid';
+    else if (digits.length < SUBMISSION_FIELD_LIMITS.contactPhoneDigits.min) errors.contactPersonPhone = 'too_short';
+    else if (digits.length > SUBMISSION_FIELD_LIMITS.contactPhoneDigits.max) errors.contactPersonPhone = 'too_long';
+    else value.contactPersonPhone = s;
+  }
+  if ('status' in src) {
+    if ((EDITABLE_STATUSES as readonly unknown[]).includes(src.status)) value.status = src.status;
+    else errors.status = 'invalid';
+  }
+  for (const f of OVERRIDE_FIELDS) {
+    if (!(f in src)) continue;
+    const v = src[f] === '' || src[f] === undefined ? null : src[f];
+    if (isValidOverride(f, v)) value[f] = v; else errors[f] = 'invalid';
+  }
+  return { value, errors };
+};
 
 const same = (a: unknown, b: unknown): boolean => {
   if (Array.isArray(a) || Array.isArray(b)) {
@@ -148,7 +201,11 @@ export const checkEditRequest = (body: unknown, current: EditableJobValues): Edi
   if (unknown.length) return { ok: false, errors: { _: 'bad_field' }, badFields: unknown.slice(0, 10) };
   const given: Record<string, unknown> = {};
   for (const k of EDITABLE_JOB_FIELDS) if (k in src) given[k] = src[k];
-  const { value, errors } = validateSubmission(given, { partial: true });
+  const extra = checkExtraJobFields(given);
+  for (const k of Object.keys(extra.value).concat(Object.keys(extra.errors))) delete given[k];
+  const checked = validateSubmission(given, { partial: true });
+  const errors = { ...checked.errors, ...extra.errors } as FieldErrors;
+  const value = { ...checked.value, ...extra.value };
   if (Object.keys(errors).length) return { ok: false, errors };
   const changes: Partial<EditableJobValues> = {};
   for (const k of EDITABLE_JOB_FIELDS) {
@@ -182,6 +239,7 @@ export const changesToJobUpdate = (changes: Partial<EditableJobValues>, toHtml: 
     if (k === 'description') out.description = toHtml(String(v));
     else if (k === 'publicEmail') out.contactPersonEmail = v ?? null;
     else if (k === 'externalLink') out.externalLink = v ?? '';
+    else if (k === 'contactPersonName' || k === 'contactPersonPhone') out[k] = v ?? '';
     else out[k] = v;
   }
   return out;

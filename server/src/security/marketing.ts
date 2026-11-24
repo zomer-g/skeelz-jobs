@@ -7,9 +7,10 @@
  *  record a removal on someone's request, never a "yes". An unverified address (a quick application, the employer
  *  form) never reverses a removal.
  *
- *  Removals are kept by a keyed hash of the address (emailCode.emailKey), so a request from someone without an
+ *  Removals are kept by a keyed hash of the address (security/addressKey.ts, its own secret since 24.11.2026), so a request from someone without an
  *  account is honoured without storing their address.
  * ========================================================================== */
+import { unsubscribeSecrets } from './addressKey.js';
 import crypto from 'node:crypto';
 
 export type MarketingStatus = 'agreed' | 'not_agreed' | 'removed' | 'unknown';
@@ -33,8 +34,6 @@ export const mayReceiveMarketing = (consent: boolean | null | undefined, optoutA
   marketingStatus(consent, optoutAt) === 'agreed';
 
 // ---- the one-click unsubscribe link (RFC 8058): a signed token, no expiry (an old email's link must still work) ------
-const secret = (env: Record<string, string | undefined> = process.env) =>
-  `${env.EMAIL_CODE_SECRET || env.RESET_TOKEN_SECRET || env.ACCESS_TOKEN_SECRET || 'skeelz-dev-only'}:marketing-unsubscribe`;
 const b64url = (b: Buffer | string) => Buffer.from(b).toString('base64url');
 
 export interface UnsubscribePayload { k: string; u?: string }
@@ -42,7 +41,7 @@ export interface UnsubscribePayload { k: string; u?: string }
 /** k = the keyed hash of the address (emailKey); u = the account id when there is one. Never the address itself. */
 export const unsubscribeToken = (p: UnsubscribePayload, env?: Record<string, string | undefined>): string => {
   const body = b64url(JSON.stringify(p.u ? { k: p.k, u: p.u } : { k: p.k }));
-  const mac = crypto.createHmac('sha256', secret(env)).update(body).digest('base64url');
+  const mac = crypto.createHmac('sha256', unsubscribeSecrets(env)[0]).update(body).digest('base64url');
   return `${body}.${mac}`;
 };
 
@@ -50,10 +49,14 @@ export const verifyUnsubscribeToken = (token: unknown, env?: Record<string, stri
   if (typeof token !== 'string' || token.length > 600) return null;
   const [body, mac, extra] = token.split('.');
   if (!body || !mac || extra !== undefined) return null;
-  const expected = crypto.createHmac('sha256', secret(env)).update(body).digest();
   let given: Buffer;
   try { given = Buffer.from(mac, 'base64url'); } catch { return null; }
-  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null;
+  // The current key signs; a link signed before 24.11.2026 (the legacy key) still verifies (security/addressKey.ts).
+  const ok = unsubscribeSecrets(env).some((k) => {
+    const expected = crypto.createHmac('sha256', k).update(body).digest();
+    return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+  });
+  if (!ok) return null;
   try {
     const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
     if (typeof p?.k !== 'string' || !/^[0-9a-f]{64}$/.test(p.k)) return null;

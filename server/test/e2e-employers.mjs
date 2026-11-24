@@ -255,7 +255,7 @@ await check('another employer sees none of it; claims only their own earlier ano
 let reqId = '';
 await check('edit request: only allowed fields, validated, real changes only; stored pending, the board unchanged', async () => {
   const p = `/api/employer/jobs/${jobId}/edit-requests`;
-  const bf = await emp.req('POST', p, { status: 'Closed' });
+  const bf = await emp.req('POST', p, { pinnedAt: new Date().toISOString() }); // board fields stay with SKEELZ (24.11.2026)
   assert.equal(bf.status, 400); assert.equal(bf.json.code, 'bad_field');
   const bf2 = await emp.req('POST', p, { isSponsored: true, title: T_NEW });
   assert.equal(bf2.status, 400); assert.equal(bf2.json.code, 'bad_field');

@@ -50,6 +50,13 @@ const SUITES = {
   'e2e-signup-fields': { db: true, server: true },
   'e2e-settings': { db: true, server: true },
   'e2e-multi-role': { db: true, server: true },
+  'e2e-role-blocks': { db: true, server: true },
+  // The review of 24.11.2026: SMOOV ON pointed at the suite's own mock (never a real one), the sandbox export, the webhook.
+  'e2e-review-fixes': { db: true, server: true, serverEnv: {
+    ENABLE_SMOOVE: 'true', SMOOVE_API_KEY: 'e2e-mock-key', SMOOVE_LIST_ID: '1', SMOOVE_GUEST_LIST_ID: '2',
+    SMOOVE_API_URL: 'http://127.0.0.1:3197/v1/contacts', SANDBOX_EXPORT_TOKEN: 'e2e-sandbox-export-token-0123456789abcdef',
+    RESEND_WEBHOOK_SECRET: 'whsec_ZTJlLW1haWwtd2ViaG9vay1zZWNyZXQtMDEyMzQ1' },
+    suiteEnv: { SANDBOX_EXPORT_TOKEN: 'e2e-sandbox-export-token-0123456789abcdef', RESEND_WEBHOOK_SECRET: 'whsec_ZTJlLW1haWwtd2ViaG9vay1zZWNyZXQtMDEyMzQ1' } },
   'e2e-microsoft-sso': { db: true, server: true },
   'e2e-activity-log': { db: true, server: true },
   'e2e-email-signin': { db: true, server: true },

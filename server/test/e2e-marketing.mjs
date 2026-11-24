@@ -63,7 +63,9 @@ const statusOf = async (staff, id) => {
   assert.equal(r.status, 200, r.text);
   return r.json.data;
 };
-const optoutRow = async (email) => (await db.query(`SELECT * FROM marketing_optouts WHERE email_key = $1`, [emailKey(email)])).rows[0];
+// The lasting lists have their own key since 24.11.2026 (security/addressKey.ts); rows made with the old one still count.
+const { addressKeys } = await import('../dist/security/addressKey.js');
+const optoutRow = async (email) => (await db.query(`SELECT * FROM marketing_optouts WHERE email_key = ANY($1::text[])`, [addressKeys(email)])).rows[0];
 
 // ---- setup ----
 const cm = jar(); const admin = jar(); const co = jar();

@@ -32,12 +32,13 @@ import { isObjectId } from '../utils/ids.js';
 import * as customFields from '../services/customFieldsService.js';
 import { asCustomValues, changedValues, checkCustomValues, CustomValue, errorCodesOf } from '../models/schemas/customFields.js';
 
-/** Added job fields an employer's edit request covers: active ones shown on the job page (their answers are public
- *  anyway). Staff-only fields are asked in the employer form for a NEW job, but their answers are never shown back to
- *  an employer (staff may keep notes there). */
-const editableJobFields = async () => (await customFields.definitionsOf('job')).filter((d) => d.active && d.showOnJobPage);
+/** Added job fields an employer's edit request covers (owner, 24.11.2026: every field): all active ones. The answers
+ *  of those shown on the job page are public anyway and are shown back in the edit form. The staff-only ones are
+ *  WRITE-ONLY for an employer: asked in the form, never shown back (staff may keep notes there), never compared with the
+ *  stored answer (so the answer to a request tells nothing about it), and an empty answer means "leave it as it is". */
+const editableJobFields = async () => (await customFields.definitionsOf('job')).filter((d) => d.active);
 const activeJobValues = async (stored: unknown): Promise<Record<string, CustomValue>> => {
-  const ids = new Set((await editableJobFields()).map((d) => d.id));
+  const ids = new Set((await editableJobFields()).filter((d) => d.showOnJobPage).map((d) => d.id));
   return Object.fromEntries(Object.entries(asCustomValues(stored)).filter(([k]) => ids.has(k)));
 };
 
@@ -147,11 +148,23 @@ export const requestEdit = async (req: Request, res: Response, next: NextFunctio
     const { customFields: rawExtra, ...body } = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, any>;
     // The added job fields (settings screen): the same rules as the employer form; only changed answers are asked for.
     let extraChanges: Record<string, CustomValue | null> = {};
+    const staffOnly = new Set<string>();
     if (rawExtra !== undefined) {
-      const defs = await editableJobFields(); // any other field id is dropped (allowlist)
+      const all = await editableJobFields(); // any other field id is dropped (allowlist)
+      for (const d of all) if (!d.showOnJobPage) staffOnly.add(d.id);
+      // A staff-only answer left empty = unchanged: not required here (the employer never sees the stored one).
+      const defs = all.map((d) => (d.showOnJobPage ? d : { ...d, required: false }));
+      const raw = rawExtra && typeof rawExtra === 'object' ? rawExtra as Record<string, unknown> : {};
       const r = checkCustomValues(defs, rawExtra);
       if (!r.ok) return res.status(400).json({ message: 'Some fields are missing or invalid', code: 'submission_invalid', fields: errorCodesOf(defs, rawExtra, r.bad) });
-      extraChanges = changedValues((j as any).customFields, r.values);
+      const shown = Object.fromEntries(Object.entries(r.values).filter(([k]) => !staffOnly.has(k)));
+      extraChanges = changedValues((j as any).customFields, shown);
+      // Staff-only: every non-empty answer is asked for as given, whatever is stored (never compared).
+      for (const id of staffOnly) {
+        const v = raw[id];
+        if (v === undefined || v === '' || v === false || v === null) continue;
+        if (id in r.values) extraChanges[id] = r.values[id];
+      }
     }
     const extraIds = Object.keys(extraChanges);
     const check = checkEditRequest(body, current);
@@ -170,7 +183,8 @@ export const requestEdit = async (req: Request, res: Response, next: NextFunctio
     if (extraIds.length) {
       const cur = asCustomValues((j as any).customFields);
       changes.customFields = extraChanges;
-      base.customFields = Object.fromEntries(extraIds.map((k) => [k, cur[k] ?? null]));
+      // The stored answer of a staff-only field is never put where the employer reads it back (their request list).
+      base.customFields = Object.fromEntries(extraIds.filter((k) => !staffOnly.has(k)).map((k) => [k, cur[k] ?? null]));
     }
     const fields = [...std.fields, ...extraIds.map((k) => `customFields.${k}`)];
     const rid = await employerDAL.createEditRequest(id, me(req), changes as any, base as any, cleanReason(body.note));

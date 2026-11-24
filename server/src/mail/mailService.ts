@@ -7,6 +7,7 @@
  *  status and Resend's message id. Never the address, never the text. Never throws: the action that triggered an
  *  email never fails because of it.
  * ========================================================================== */
+import { addressKey, addressKeys } from '../security/addressKey.js';
 import { query, queryOne } from '../config/db.js';
 import { emailKey, emailCodeEnabled } from '../security/emailCode.js';
 import { safeErrorText } from '../security/pure.js';
@@ -79,7 +80,7 @@ export const composeMail = async (k: MailKind, values: Record<string, unknown>):
 // ---- suppression (bounces, complaints) ---------------------------------------------------------------------------
 export const isSuppressed = async (to: string): Promise<boolean> => {
   try {
-    return !!(await queryOne(`SELECT 1 FROM mail_suppressions WHERE email_key = $1`, [emailKey(to)]));
+    return !!(await queryOne(`SELECT 1 FROM mail_suppressions WHERE email_key = ANY($1::text[])`, [addressKeys(to)]));
   } catch (e) {
     console.error('[mail] suppression read failed', safeErrorText(e));
     return false;
@@ -90,12 +91,12 @@ export const suppress = async (address: string, reason: SuppressReason): Promise
   await query(
     `INSERT INTO mail_suppressions (email_key, reason) VALUES ($1, $2)
      ON CONFLICT (email_key) DO UPDATE SET reason = EXCLUDED.reason, updated_at = now(), events = mail_suppressions.events + 1`,
-    [emailKey(address), reason]);
+    [addressKey(address), reason]);
 };
 
 /** Removes an address from the suppression list (a staff member fixed it). true when it was there. */
 export const unsuppress = async (address: string): Promise<boolean> =>
-  (await query(`DELETE FROM mail_suppressions WHERE email_key = $1 RETURNING 1`, [emailKey(address)])).length > 0;
+  (await query(`DELETE FROM mail_suppressions WHERE email_key = ANY($1::text[]) RETURNING 1`, [addressKeys(address)])).length > 0;
 
 const record = async (kind: string, status: SendStatus, resendId?: string, error?: string, version?: string | null) => {
   try {
@@ -221,6 +222,12 @@ export const webhookConfigured = () => !!process.env.RESEND_WEBHOOK_SECRET;
 /** true the first time this Svix message id is seen (replays and retries change nothing twice). */
 export const firstDelivery = async (svixId: string): Promise<boolean> =>
   (await query(`INSERT INTO mail_webhook_events (svix_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING 1`, [svixId.slice(0, 200)])).length > 0;
+
+/** Handling failed after the id was claimed: forget it, so Resend's retry is handled (security review 24.11.2026, M4).
+ *  Every step of the handling is an upsert, so a retry after a partial failure changes nothing twice. */
+export const releaseDelivery = async (svixId: string): Promise<void> => {
+  await query(`DELETE FROM mail_webhook_events WHERE svix_id = $1`, [svixId.slice(0, 200)]);
+};
 
 export const updateSendStatus = async (resendId: string, status: string): Promise<number> =>
   (await query(`UPDATE mail_sends SET status = $2, updated_at = now() WHERE resend_id = $1 RETURNING 1`, [resendId, status])).length;

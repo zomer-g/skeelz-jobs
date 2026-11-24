@@ -52,13 +52,16 @@ test('the mailing list is reached only through the consent gate', async () => {
   const src = (f: string) => fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'src', f), 'utf8');
   const userService = src('services/userService.ts');
   const guest = src('services/jobApplicationService.ts');
-  assert.match(userService, /if \(mayAddToMailingList\(opts\.consent\.marketing\)\) \{[\s\S]{0,200}createSmooveContact/);
-  assert.match(guest, /enableSmoove && mayAddToMailingList\(consent\.marketing\)\) \{\s*await smooveService\.ensureSmooveGuest/);
+  // Every push goes through ONE gate: an explicit "yes" and not on the removal list (security review 24.11.2026, M2).
+  assert.match(userService, /if \(await mayPushToList\(createdUser\.email, opts\.consent\.marketing\)\) \{[\s\S]{0,200}createSmooveContact/);
+  assert.match(guest, /enableSmoove && await mayPushToList\(guest\.email, consent\.marketing\)\) \{\s*await smooveService\.ensureSmooveGuest/);
   // No other caller of the SMOOV service.
   for (const f of fs.readdirSync(path.join(import.meta.dirname, '..', '..', 'src'), { recursive: true }) as string[]) {
     if (!f.endsWith('.ts') || /smooveService\.ts$/.test(f)) continue;
     const s = src(f);
     const calls = s.match(/smooveService\.\w+\(/g) ?? [];
-    if (calls.length) assert.ok(/userService\.ts$|jobApplicationService\.ts$/.test(f), `${f} calls SMOOV: ${calls.join(', ')}`);
+    if (calls.length) assert.ok(/userService\.ts$|jobApplicationService\.ts$|marketingList\.ts$/.test(f), `${f} calls SMOOV: ${calls.join(', ')}`);
+    // marketingList only removes (a removal reaches SMOOV too); it never adds anyone.
+    if (/marketingList\.ts$/.test(f)) assert.deepEqual([...new Set(calls)], ['smooveService.unsubscribeSmooveContact(']);
   }
 });

@@ -137,7 +137,9 @@ const ADMIN_ONLY = ['GET /admin/security', 'POST /admin/security/grant', 'POST /
   'GET /admin/security/salesforce/legacy-jobs', 'POST /admin/security/salesforce/legacy-jobs/run', 'GET /admin/security/salesforce/cutover-report',
   'GET /admin/security/salesforce/legacy-candidates', 'POST /admin/security/salesforce/legacy-candidates/run',
   // Linking the settings screen's added fields to Salesforce fields (owner, 23.11.2026).
-  'GET /admin/security/salesforce/custom-fields', 'PUT /admin/security/salesforce/custom-fields/:id'];
+  'GET /admin/security/salesforce/custom-fields', 'PUT /admin/security/salesforce/custom-fields/:id',
+  // Blocking a role of an account (owner, 24.11.2026): admins only.
+  'GET /admin/role-blocks', 'GET /admin/role-blocks/:userId', 'PUT /admin/role-blocks/:userId/:role'];
 
 const gatesOf = (k) => {
   const r = routes.find((x) => x.key === k);
@@ -172,6 +174,9 @@ const ADMIN_ELSEWHERE = new Map([
   ['GET /admin/api-tokens', 'internal API keys: on the admin security screen only (owner, 20.11.2026)'],
   ['POST /admin/api-tokens', 'internal API keys: on the admin security screen only (owner, 20.11.2026)'],
   ['POST /admin/api-tokens/:id/revoke', 'internal API keys: on the admin security screen only (owner, 20.11.2026)'],
+  ['GET /admin/role-blocks', 'blocking a role of any account (candidate / employer / staff): admins only (owner, 24.11.2026)'],
+  ['GET /admin/role-blocks/:userId', 'blocking a role of any account (candidate / employer / staff): admins only (owner, 24.11.2026)'],
+  ['PUT /admin/role-blocks/:userId/:role', 'blocking a role of any account (candidate / employer / staff): admins only (owner, 24.11.2026)'],
 ]);
 
 test('the sandbox refresh is admin-only (it used to be mounted outside the router)', () => {
@@ -218,7 +223,9 @@ test('several roles per account: a gate opens on ANY role of the session; staff 
   const fs = await import('node:fs');
   const src = fs.readFileSync(new URL('../src/middleware/jwtAuthMiddleware.ts', import.meta.url), 'utf8');
   assert.match(src, /user\.roles\.some\(\(r\) => allowedRoles\.includes/);
-  assert.match(src, /effectiveRoles\(rolesOf\(user\), via\)/);
+  // Blocked roles (24.11.2026) never count: the roles are usableRolesOf (DB roles minus admin blocks), then the method.
+  assert.match(src, /effectiveRoles\(usableRolesOf\(user\), via\)/);
+  assert.match(src, /blocked_roles/);
 });
 
 test('no gate but employerOnly admits an employer (never staff, never candidate routes)', async () => {

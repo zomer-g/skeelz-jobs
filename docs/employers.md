@@ -119,11 +119,18 @@ submissions can't be claimed. Approved ones bring their job into "My jobs".
 ## Edit requests (בקשות עריכה)
 
 An employer edits one of **their** published jobs → `POST /api/employer/jobs/:jobId/edit-requests`. Stored in
-`job_edit_requests` as **pending**; the live job is **not changed**. Editable: title, company, city, scope, skills,
+`job_edit_requests` as **pending**; the live job is **not changed**. **Every field of the job** (owner, 24.11.2026:
+"employers may edit any field with staff approval"; `EDITABLE_JOB_FIELDS`): title, company, city, scope, skills,
 description (plain text, as in the form), application link, public application email, threshold condition ("תנאי סף",
-optional plain text; `docs/jobs-management.md` "Threshold condition") — the public form's fields with
-its rules (`EDITABLE_JOB_FIELDS`). Never status, dates, pin/bump, sponsored, apply policy or internal comments. One
-pending request per job (409 `edit_pending`); the employer can withdraw it.
+optional plain text; `docs/jobs-management.md` "Threshold condition") with the public form's rules; the job's public
+contact name and phone (shown only on a self-apply job; empty clears); its status (Active / Suspended / Closed); its
+apply settings (`guestModeOverride`, `quickCvOverride`, `regularCvOverride`; empty = the site's default); and every
+active added job field (`docs/settings.md`: those not shown on the job page are write-only for the employer). Not
+fields of the job but how SKEELZ runs the board, so never in a request (400 `bad_field`): pin / bump, sponsored,
+publish date and schedule, internal comments, archive. One pending request per job (409 `edit_pending`); the employer
+can withdraw it. **Who approves:** a coordinator or a content manager; a change of the threshold condition or of an apply
+setting only a content manager (403 `content_manager_required` with the field names; `CONTENT_MANAGER_FIELDS` in
+`security/roleFields.ts`). End-to-end: `test/e2e-role-blocks.mjs`.
 
 Content managers see a second tab on **"משרות ממעסיקים"**: **בקשות עריכה**. Opening one shows, per field, the value when
 the employer asked, the value now (marked if it changed since) and the requested value. **Approve** applies the change
@@ -145,14 +152,14 @@ Code: `server/src/dal/forwardDAL.ts`, `controllers/employerForwardController.ts`
 
 - **Added fields** (the settings screen, `docs/settings.md`): a candidate's answers to added sign-up questions never reach
   an employer. The employer form and edit requests carry the active added JOB fields (owner, 23.11.2026), with the same
-  rules as the staff form; an edit request covers only the fields shown on the job page (staff-only answers are never shown
+  rules as the staff form; since 24.11.2026 an edit request covers every active job field, the staff-only ones write-only (their answers are never shown
   to an employer) and changes them only after a coordinator or content manager approves.
 - **Nothing reaches an employer automatically.** A content manager (or admin) presses **"העברה למעסיק"** on one
   application (`POST /api/admin/employer-forwards { kind, applicationId }`): registered applications (`job_applications`)
   and quick ones (`guest_applications`), to a job the employer owns through `employer_jobs`. Until then the employer
   sees nothing about it, not even a count. Jobs imported from the existing site have no owner here → refused
-  (`no_employer`), never shown. A deactivated employer can't receive (`employer_inactive`) and loses access at once
-  (the gate reads the DB on every request).
+  (`no_employer`), never shown. A deactivated employer — or one whose employer role an admin blocked (24.11.2026, `docs/security.md`
+  "Blocking a role") — can't receive (`employer_inactive`) and loses access at once (the gate reads the DB on every request).
 - **What the employer sees** (`GET /api/employer/applicants`, the "הצגת המועמדים" button on `/employer`): per job,
   each forwarded applicant's **name**, the **forward date**, whether there is a CV, and "פתיחת קורות חיים"
   (`GET /api/employer/applicants/:forwardId/cv`, downloaded as `cv.pdf` / `cv.docx`). No email, phone, city, other

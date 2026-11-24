@@ -33,7 +33,7 @@ import { hasNonStaffRole, isDbError, safeErrorText, safeReturnPath, withQueryPar
 import { rolesOf } from '../models/enums.js';
 import { setAccessTokenInCookies, setRefreshTokenInCookies } from '../utils/authUtils.js';
 import { loginActor } from './authController.js';
-import { auditLogin, signinFailed } from '../security/signins.js';
+import { auditLogin, refusedAction, signinFailed } from '../security/signins.js';
 import { anon, finish, startSignup } from './ssoController.js';
 
 const FLOW_COOKIE = 'oidc_microsoft';
@@ -167,7 +167,7 @@ export const msCallback = async (req: Request, res: Response) => {
       s = await authService.issueSession(user, 'microsoft'); // refuses a deactivated account
     } catch (e) {
       if ((e as any)?.isAxiosError) {
-        signinFailed(req, loginActor(user), 'auth.login_refused_deactivated', user, { method: 'microsoft', role: user.role });
+        signinFailed(req, loginActor(user), refusedAction(e), user, { method: 'microsoft', role: user.role });
         return finish(res, returnPath, 'failed');
       }
       throw e;

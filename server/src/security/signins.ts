@@ -20,7 +20,8 @@ import {
   reachedBurst, safeErrorText,
 } from './pure.js';
 
-import { rolesOf } from '../models/enums.js';
+import { rolesOf, usableRolesOf } from '../models/enums.js';
+import { AuthErrorCodes } from '../i18n/i18n.js';
 
 type Account = { _id?: any; id?: any; email?: string; role?: string; roles?: string[] };
 const idOf = (u: Account) => String(u._id ?? u.id);
@@ -41,13 +42,17 @@ const knownAddresses = async (actor: string): Promise<string[]> => {
   return rows.map((r) => r.ip);
 };
 
+/** The refusal an issueSession error stands for: every role of the sign-in blocked by an admin, or deactivated. */
+export const refusedAction = (e: unknown): 'auth.login_refused_blocked' | 'auth.login_refused_deactivated' =>
+  (e as any)?.code === AuthErrorCodes.ROLES_BLOCKED ? 'auth.login_refused_blocked' : 'auth.login_refused_deactivated';
+
 /** Writes auth.login (role, method, address, device) and runs the unusual-sign-in checks. Never breaks the sign-in. */
 export const auditLogin = (req: Request, user: Account, method: string, extra: Record<string, unknown> = {}): void => {
   const ctx = signinContext(req);
   const actor = actorOfAccount(user);
   const role = String(user.role ?? '');
   // The roles this session carries (several per account since 23.11.2026; staff roles only on Google).
-  const roles = effectiveRoles(rolesOf(user as any), method);
+  const roles = effectiveRoles(usableRolesOf(user as any), method); // blocked roles (24.11.2026) never count
   void (async () => {
     try {
       const staff = roles.some((r) => isStaffRole(r));

@@ -48,13 +48,13 @@ const bool = (v: unknown): boolean => v === true || v === 'true' || v === 1 || v
 
 /** The text of some HTML, whitespace collapsed: to tell whether two descriptions say the same thing. */
 export const plainText = (html: string): string => decodeEntities(String(html ?? '')
-  .replace(/<\s*(br|\/p|\/div|\/li|\/h[1-6]|\/tr)\b[^>]*>/gi, '\n')
-  .replace(/<[^>]*>/g, ' '))
+  .replace(/<\s*(br|\/p|\/div|\/li|\/h[1-6]|\/tr)\b[^<>]*>/gi, '\n')
+  .replace(/<[^<>]*>/g, ' '))
   .replace(/[•·▪●]/g, ' ')
   .replace(/\s+/g, ' ')
   .trim();
 
-export const looksLikeHtml = (s: string): boolean => /<\s*\/?\s*(p|div|br|ul|ol|li|h[1-6]|strong|b|em|i|u|span|a)\b[^>]*>/i.test(s);
+export const looksLikeHtml = (s: string): boolean => /<\s*\/?\s*(p|div|br|ul|ol|li|h[1-6]|strong|b|em|i|u|span|a)\b[^<>]*>/i.test(s);
 
 const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 /** Plain text → simple HTML: a paragraph per blank-line block, line breaks kept. */

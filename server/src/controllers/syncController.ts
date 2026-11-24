@@ -10,6 +10,8 @@
  *  tokens and pending uploads are not exported. The sandbox makes its own admin
  *  (bootstrapAdmin) and test users.
  * ========================================================================== */
+import { definitionsOf } from '../services/customFieldsService.js';
+import { asCustomValues } from '../models/schemas/customFields.js';
 import crypto from 'crypto';
 import { Request, Response } from 'express';
 import { query } from '../config/db.js';
@@ -51,12 +53,17 @@ export const exportForSandbox = async (req: Request, res: Response): Promise<voi
     return;
   }
   try {
+    // Added job fields: only the answers shown on the public job page leave prod; staff-only ones (internal notes)
+    // never do (security review 24.11.2026, M5).
+    const publicIds = new Set((await definitionsOf('job')).filter((d) => d.active && d.showOnJobPage).map((d) => d.id));
+    const publicOnly = (v: unknown) => Object.fromEntries(Object.entries(asCustomValues(v)).filter(([k]) => publicIds.has(k)));
     const [locations, skills, jobs, users, jobApplications] = await Promise.all([
       query(`SELECT * FROM locations`),
       query(`SELECT * FROM skills`),
       // The employer's contact person and the internal comments never leave prod.
       query(`SELECT * FROM jobs`).then((rows) => rows.map((j) => ({
         ...j, contact_person_name: '', contact_person_phone: '', contact_person_email: '', comments: '',
+        ...('custom_fields' in j ? { custom_fields: publicOnly(j.custom_fields) } : {}),
       }))),
       query(`SELECT id, 'משתמש' AS first_name, 'בדיקה ' || right(id, 6) AS last_name,
                     'user-' || id || '@sandbox.test' AS email, 'sbx-' || id AS phone_number,

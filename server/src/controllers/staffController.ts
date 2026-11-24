@@ -32,7 +32,7 @@ import { query, queryOne } from '../config/db.js';
 import { ASSIGNABLE_ROLES, REVIEWED_ROLES, StaffChange, staffChangeRefusal } from '../security/pure.js';
 import { actorOf, writeAudit } from '../security/audit.js';
 import { invalidateTokens } from '../services/tokenStorageService.js';
-import { TokenType, UserRole, rolesOf } from '../models/enums.js';
+import { TokenType, UserRole, blockedOf, rolesOf } from '../models/enums.js';
 import { isObjectId, newObjectId } from '../utils/ids.js';
 import { mailStaffInvite } from '../mail/triggers.js';
 import appConfig from '../config/appConfig.js';
@@ -64,14 +64,16 @@ const REFUSAL_TEXT: Record<string, string> = {
 
 // One staff change at a time, so two admins can't demote each other into "no admin".
 let chain: Promise<unknown> = Promise.resolve();
-const serialized = <T>(fn: () => Promise<T>): Promise<T> => {
+export const serialized = <T>(fn: () => Promise<T>): Promise<T> => {
   const p = chain.then(fn, fn);
   chain = p.catch(() => undefined);
   return p;
 };
 
-const activeAdmins = async () =>
-  (await queryOne<{ n: number }>(`SELECT COUNT(*)::int AS n FROM users WHERE 'admin' = ANY(roles) AND deactivated_at IS NULL`))?.n ?? 0;
+/** Admins who can act: active and their staff role not blocked (24.11.2026). */
+export const activeAdmins = async () =>
+  (await queryOne<{ n: number }>(`SELECT COUNT(*)::int AS n FROM users WHERE 'admin' = ANY(roles) AND deactivated_at IS NULL
+                                   AND NOT ('staff' = ANY(blocked_roles))`))?.n ?? 0;
 
 const loadTarget = (userId: string) =>
   queryOne<Target>(`SELECT id, email, role, roles, deactivated_at FROM users WHERE id = $1`, [userId]);
@@ -84,7 +86,7 @@ const refuse = async (req: Request, target: Target, change: StaffChange) => staf
 });
 
 /** Every session of the person closed now, and every internal API key they issued revoked (logged, with why). */
-const closeSessions = async (req: Request, userId: string, reason: Parameters<typeof revokeTokensOf>[2]) => {
+export const closeSessions = async (req: Request, userId: string, reason: Parameters<typeof revokeTokensOf>[2]) => {
   await query(`UPDATE users SET sessions_revoked_at = now() WHERE id = $1`, [userId]);
   await invalidateTokens(userId, TokenType.REFRESH_TOKEN);
   await revokeTokensOf(userId, actorOf(req), reason);
@@ -121,8 +123,8 @@ export const changeStaffRole = (req: Request, userId: string, to: string, action
 export const list = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const rows = await query<{ id: string; email: string; first_name: string; last_name: string; role: string; roles: string[];
-      created_at: Date; deactivated_at: Date | null; has_sso: boolean }>(
-      `SELECT id, email, first_name, last_name, role, roles, created_at, deactivated_at, xhostd_sub IS NOT NULL AS has_sso
+      blocked_roles: string[]; created_at: Date; deactivated_at: Date | null; has_sso: boolean }>(
+      `SELECT id, email, first_name, last_name, role, roles, blocked_roles, created_at, deactivated_at, xhostd_sub IS NOT NULL AS has_sso
          FROM users WHERE roles && $1::text[] ORDER BY deactivated_at IS NOT NULL, role, email`, [REVIEWED_ROLES]);
     const logins = await query<{ actor: string; at: Date }>(
       `SELECT actor, max(at) AS at FROM audit_log WHERE action = 'auth.login' AND actor = ANY($1) GROUP BY actor`,
@@ -136,6 +138,8 @@ export const list = async (req: Request, res: Response, next: NextFunction) => {
         id: r.id, email: r.email, firstName: r.first_name, lastName: r.last_name, role: staffRoleOf(r),
         // Other roles the person holds too: a note on the screen, never their candidate / employer data.
         alsoCandidate: rolesOf(r).includes(UserRole.USER), alsoEmployer: rolesOf(r).includes(UserRole.EMPLOYER),
+        // Roles an admin blocked ('user' | 'employer' | 'staff', 24.11.2026; roleBlocksController).
+        blocked: blockedOf(r),
         active: !r.deactivated_at, deactivatedAt: r.deactivated_at, createdAt: r.created_at,
         invitePending: !r.has_sso, lastLogin: lastLogin.get(r.email.toLowerCase()) ?? null,
       })),

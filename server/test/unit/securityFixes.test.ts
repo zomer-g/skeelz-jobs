@@ -108,3 +108,27 @@ test('the page_location / page_referrer set before GTM loads are sanitized like 
   const ret = snippet.slice(snippet.indexOf('return `<script'));
   assert.ok(ret.indexOf("gtag('set',{page_location:") > 0 && ret.indexOf("gtag('set',{page_location:") < ret.indexOf('window.__skeelzLoadAnalytics=function'));
 });
+
+// ---- security review 24.11.2026 (M1, M4) ------------------------------------------------------------------------
+test('M1: no live code checks the candidate role with role = \'user\' (several roles per account)', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const root = path.join(import.meta.dirname, '..', '..', 'src');
+  for (const f of fs.readdirSync(root, { recursive: true }) as string[]) {
+    // One-time migrations in db.ts already ran in production; widening them would change what they deleted.
+    if (!f.endsWith('.ts') || /config[\\/]db\.ts$/.test(f)) continue;
+    // The one allowed form: the roles set first, `role` only for a row read without it (pure.ts profileIncomplete).
+    const s = fs.readFileSync(path.join(root, f), 'utf8').replace("u.roles?.length ? u.roles.includes('user') : u.role === 'user'", '');
+    assert.ok(!/\brole\s*(=|<>|!=)\s*'(user|employer)'/.test(s), `${f}: SQL role = 'user' / 'employer'`);
+    assert.ok(!/\.role\s*(===|!==)\s*'user'/.test(s), `${f}: .role === 'user'`);
+  }
+});
+
+test('M4: a failed webhook handling releases the message id, so Resend\'s retry is handled', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const s = fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'src', 'controllers', 'mailController.ts'), 'utf8');
+  const handler = s.slice(s.indexOf('export const resendWebhook'));
+  assert.match(handler, /claimed = true/);
+  assert.match(handler, /catch \(e\) \{[\s\S]{0,200}if \(claimed\) await mail\.releaseDelivery\(svixId\)/);
+});

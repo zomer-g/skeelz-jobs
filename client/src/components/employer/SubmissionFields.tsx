@@ -13,7 +13,7 @@ import { LocationService } from '../../services/api/Location.service';
 import { SkillsService } from '../../services/api/Skills.service';
 import { isString } from '../../utils/utils';
 import CustomFieldInputs from '../common/CustomFieldInputs';
-import { customErrors, FormField, getPublicJobFields, loadPublicJobFields } from '../../utils/customFields';
+import { customErrors, editRequestJobFields, FormField, getPublicJobFields, loadPublicJobFields } from '../../utils/customFields';
 
 export interface SubmissionValues {
   title: string;
@@ -80,7 +80,7 @@ export const validate = (v: SubmissionValues, opts: { consent?: boolean; contact
   if (threshold && threshold.length < LIMITS.thresholdCondition[0]) e.thresholdCondition = 'too_short';
   else if (threshold.length > LIMITS.thresholdCondition[1]) e.thresholdCondition = 'too_long';
   // The added job fields (same rule as the server's checkCustomValues).
-  for (const [id, code] of Object.entries(customErrors(getPublicJobFields(opts.onlyJobPageExtra), v.customFields))) e[`customFields.${id}`] = code;
+  for (const [id, code] of Object.entries(customErrors(opts.onlyJobPageExtra ? editRequestJobFields() : getPublicJobFields(), v.customFields))) e[`customFields.${id}`] = code;
   if (opts.contact === false) { return e; }
   len('contactName', LIMITS.contactName);
   if (!e.contactName && /\d/.test(v.contactName)) e.contactName = 'invalid';
@@ -149,7 +149,7 @@ interface FieldsProps {
   disabled?: boolean;
   /** false: no contact section (an employer's edit request). */
   showContact?: boolean;
-  /** An employer's edit request: only the added fields shown on the job page. */
+  /** An employer's edit request: every added field; the staff-only ones write-only (editRequestJobFields). */
   onlyJobPageExtra?: boolean;
 }
 
@@ -160,8 +160,9 @@ const SubmissionFields: React.FC<FieldsProps> = ({ prefix, values, errors, onCha
   const [cities, setCities] = useState<{ citySymbol: number; city: string }[]>([]);
   const [skills, setSkills] = useState<{ _id: string; name: string }[]>([]);
   const [skillFilter, setSkillFilter] = useState('');
-  const [jobFields, setJobFields] = useState<FormField[]>(getPublicJobFields(onlyJobPageExtra));
-  useEffect(() => { loadPublicJobFields().then(() => setJobFields(getPublicJobFields(onlyJobPageExtra))); }, [onlyJobPageExtra]);
+  const fieldsFor = (editRequest: boolean) => (editRequest ? editRequestJobFields() : getPublicJobFields());
+  const [jobFields, setJobFields] = useState<FormField[]>(fieldsFor(onlyJobPageExtra));
+  useEffect(() => { loadPublicJobFields().then(() => setJobFields(fieldsFor(onlyJobPageExtra))); }, [onlyJobPageExtra]);
   const scopes = useMemo(() => getLocalizedOptions(LocalizedDataKey.JOB_SCOPE, currentLanguage), [currentLanguage]);
 
   useEffect(() => {

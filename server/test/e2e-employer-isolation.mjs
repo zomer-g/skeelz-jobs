@@ -158,7 +158,10 @@ await check('A\'s whole area: no candidate, no staff email, nothing of B, no sta
     for (const bad of [CAND, CAND_PHONE, CAND_LAST, idC, CM_EMAIL, ADMIN_EMAIL, EMP_B, PHONE_B, COMPANY_B, idB, jobB, reqB]) {
       assert.ok(!text.includes(bad), `${p} carries ${bad === idC ? 'the candidate id' : bad === idB ? 'B\'s id' : 'a forbidden value'}`);
     }
-    const found = FORBIDDEN_KEYS.filter((k) => keys.has(k) && !(p === '/api/auth/session' && k === 'employer'));
+    // The edit form of the employer's OWN job carries the job's public contact (owner, 24.11.2026: every field is
+    // editable with staff approval); nowhere else.
+    const ownEditForm = (k) => /^\/api\/employer\/jobs\/[0-9a-f]{24}$/.test(p) && ['contactPersonName', 'contactPersonPhone'].includes(k);
+    const found = FORBIDDEN_KEYS.filter((k) => keys.has(k) && !(p === '/api/auth/session' && k === 'employer') && !ownEditForm(k));
     // The session's user object has an empty cvFileUrl field (the users table shape); it must be empty.
     const realFound = found.filter((k) => !(p === '/api/auth/session' && k === 'cvFileUrl' && r.json.data.user.cvFileUrl === ''));
     assert.deepEqual(realFound, [], `${p} has keys ${realFound.join(',')}`);
@@ -242,12 +245,14 @@ await check('claim: only the session\'s verified email counts — A can\'t claim
   assert.ok(!(await empA.req('GET', '/api/employer/submissions')).json.data.items.some((x) => x.title.startsWith('ISO-ANON')));
 });
 
-await check('edit request allowlist: status, pin, sponsored, dates, apply policy, comments, board fields → 400 bad_field', async () => {
-  const FIELDS = ['status', 'isPinned', 'pinnedAt', 'isSponsored', 'isMarked', 'publishDate', 'applyPolicy', 'quickApply',
-    'isSelfApply', 'comments', 'contactPersonPhone', 'uploadBy', 'deletedAt', 'importedFromLive', 'isPrivate', 'managedFields',
-    'contactPersonName', 'archivedAt', 'bumpedAt', 'visibility'];
+// Owner, 24.11.2026: an employer may ask to change every field of the job (status, its contact, apply settings, added
+// fields: test/e2e-role-blocks.mjs) — never how SKEELZ runs the board.
+await check('edit request allowlist: pin, sponsored, dates, comments, board and system fields → 400 bad_field', async () => {
+  const FIELDS = ['isPinned', 'pinnedAt', 'isSponsored', 'isMarked', 'publishDate', 'applyPolicy', 'quickApply',
+    'isSelfApply', 'comments', 'jobId', 'uploadBy', 'deletedAt', 'importedFromLive', 'isPrivate', 'managedFields',
+    'legacyState', 'archivedAt', 'bumpedAt', 'visibility', 'schedulePublish'];
   for (const part of [FIELDS.slice(0, 10), FIELDS.slice(10)]) {
-    const body = Object.fromEntries(part.map((f) => [f, f === 'status' ? 'Archived' : true]));
+    const body = Object.fromEntries(part.map((f) => [f, true]));
     const r = await empA.req('POST', `/api/employer/jobs/${jobA}/edit-requests`, { title: 'X כותרת חדשה', ...body });
     assert.equal(r.status, 400, r.text);
     assert.equal(r.json.code, 'bad_field');

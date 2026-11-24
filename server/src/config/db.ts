@@ -865,6 +865,16 @@ DO $$ BEGIN
   END IF;
 END $$;
 CREATE INDEX IF NOT EXISTS users_roles_idx ON users USING gin (roles);
+-- Per-role blocks (owner, 24.11.2026): an admin blocks one of the three kinds of role of an account — 'user'
+-- (candidate), 'employer', 'staff' (the account's staff role, whichever) — one by one; the other roles keep working.
+-- A blocked role stays in users.roles (the data stays) but counts for nothing: no gate opens on it and no sign-in
+-- carries it (models/enums.ts usableRolesOf). Blocking closes every session of the account at once.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked_roles text[] NOT NULL DEFAULT '{}';
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_blocked_roles_check') THEN
+    ALTER TABLE users ADD CONSTRAINT users_blocked_roles_check CHECK (blocked_roles <@ ARRAY['user','employer','staff']::text[]);
+  END IF;
+END $$;
 -- Fields content managers add to the candidate sign-up form ('signup') and the staff job form ('job') — the settings
 -- screen (/settings, docs/settings.md). Never deleted: turned off (active = false) keeps the answers readable.
 CREATE TABLE IF NOT EXISTS custom_fields (
@@ -890,6 +900,13 @@ END $$;
 -- The Salesforce field an added field goes to (Contact for 'signup', the Position Case for 'job'), linked by an admin;
 -- NULL = not sent. Sent only when the org has it (salesforceUtils.customFieldsForSalesforce). docs/settings.md.
 ALTER TABLE custom_fields ADD COLUMN IF NOT EXISTS sf_field text;
+-- A sign-up question is asked only after an ADMIN turned it on (owner, 24.11.2026; security review M6: a question may
+-- touch sensitive information — health, religion, a criminal record…). approved_* = who / when; cleared when a content
+-- manager rewords it (it is off again until an admin approves). Questions already on before this rule count as approved.
+ALTER TABLE custom_fields ADD COLUMN IF NOT EXISTS approved_by text;
+ALTER TABLE custom_fields ADD COLUMN IF NOT EXISTS approved_at timestamptz;
+UPDATE custom_fields SET approved_by = 'system:existing', approved_at = now()
+ WHERE form = 'signup' AND active AND approved_at IS NULL;
 -- The employer form's answers to the added job fields, until the submission is approved (then on the job).
 ALTER TABLE job_submissions ADD COLUMN IF NOT EXISTS custom_fields jsonb NOT NULL DEFAULT '{}'::jsonb;
 DO $$ BEGIN

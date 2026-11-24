@@ -423,7 +423,7 @@ export const SIGNIN_ALERTS = {
 
 /** Failed / refused sign-in entries that count towards a staff account's burst (details.account or target = user:<id>). */
 export const SIGNIN_FAILURE_ACTIONS: readonly string[] = ['auth.oauth_failed', 'auth.email_code_refused_staff', 'auth.email_code_limited',
-  'auth.email_code_refused_deactivated', 'auth.login_refused_deactivated'];
+  'auth.email_code_refused_deactivated', 'auth.login_refused_deactivated', 'auth.email_code_refused_blocked', 'auth.login_refused_blocked'];
 
 /** The address as the log keeps it: IPv4-mapped IPv6 as plain IPv4, at most 64 characters, '' when unknown. */
 export const normalizeIp = (ip: unknown): string => {

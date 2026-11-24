@@ -15,6 +15,7 @@ import { NextFunction, Request, Response } from 'express';
 import { AxiosError } from 'axios';
 import * as userDAL from '../dal/userDAL.js';
 import { setOwnMarketing } from '../dal/marketingDAL.js';
+import { removeFromList } from '../services/marketingList.js';
 import * as userService from '../services/userService.js';
 import { actorOf, writeAudit } from '../security/audit.js';
 import { checkProfile, profileIncomplete } from '../security/pure.js';
@@ -128,6 +129,7 @@ export const setMarketingConsent = async (req: Request, res: Response, next: Nex
     const before = (await userDAL.getConsent(String(user.id)))?.marketingConsent ?? null;
     // "No" puts the address on the removal list; "yes" (their own) clears it (security/marketing.ts).
     await setOwnMarketing(String(user.id), m, actorOf(req));
+    if (!m) void removeFromList(user.email); // SMOOV too, when on (services/marketingList.ts)
     void writeAudit(actorOf(req), 'user.marketing_consent_changed', 'self', { marketing: m, before });
     return res.json({ data: await view(user) });
   } catch (e: any) {

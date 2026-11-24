@@ -45,13 +45,13 @@ import {
 import { readFlow, signFlow } from '../security/oidc.js';
 import { checkProfile, hasNonStaffRole, isStaffRole, profileIncomplete, safeErrorText } from '../security/pure.js';
 import { effectiveRoles } from '../security/pure.js';
-import { isCandidate, primaryRole, rolesOf } from '../models/enums.js';
+import { isCandidate, primaryRole, rolesOf, usableRolesOf } from '../models/enums.js';
 import * as authService from '../services/authService.js';
 import { mailSignInCode } from '../mail/triggers.js';
 import * as userService from '../services/userService.js';
 import { setAccessTokenInCookies, setRefreshTokenInCookies } from '../utils/authUtils.js';
 import { loginActor } from './authController.js';
-import { auditLogin, signinContext, signinFailed } from '../security/signins.js';
+import { auditLogin, refusedAction, signinContext, signinFailed } from '../security/signins.js';
 import { auditEmployerSignup, signUpEmployer, syncEmployerLater, wantsEmployer, withEmployerDetails } from '../services/employerAccounts.js';
 
 const anon = (req: Request) => `anonymous:${req.ip}`;
@@ -91,7 +91,7 @@ const sessionAnswer = async (res: Response, user: any) => {
   setAccessTokenInCookies(res, s.accessToken);
   setRefreshTokenInCookies(res, s.refreshToken);
   // The roles THIS session carries (an emailed code never carries a staff role).
-  const roles = effectiveRoles(rolesOf(user), 'email_code');
+  const roles = effectiveRoles(usableRolesOf(user), 'email_code'); // blocked roles (24.11.2026) never count
   const { password, ...cleanUser } = await withEmployerDetails({ ...user, roles, role: primaryRole(roles) });
   const candidate = isCandidate({ roles });
   const response: LoginResponse & { profileIncomplete: boolean } = {
@@ -124,8 +124,8 @@ export const requestCode = async (req: Request, res: Response, next: NextFunctio
       `SELECT created_at FROM email_codes WHERE email_key = $1 AND NOT dev AND created_at > now() - interval '1 day' ORDER BY created_at DESC LIMIT 20`, [key]);
     const refused = requestRefusal(recent.map((r) => r.created_at));
     // One lookup for every address (role and state together), so the work before the answer is the same.
-    const user = await queryOne<{ id: string; email: string; role: string; roles: string[]; deactivated_at: Date | null }>(
-      `SELECT id, email, role, roles, deactivated_at FROM users WHERE lower(email) = lower($1)`, [email]);
+    const user = await queryOne<{ id: string; email: string; role: string; roles: string[]; blocked_roles: string[]; deactivated_at: Date | null }>(
+      `SELECT id, email, role, roles, blocked_roles, deactivated_at FROM users WHERE lower(email) = lower($1)`, [email]);
     const target = typedEmailRef(email, user ? String(user.id) : null);
     if (refused) {
       if (user) signinFailed(req, anon(req), 'auth.email_code_limited', user, { reason: refused.reason }, target);
@@ -133,7 +133,9 @@ export const requestCode = async (req: Request, res: Response, next: NextFunctio
       res.setHeader('Retry-After', String(refused.retryAfterSeconds));
       return res.status(429).json({ message: AuthErrorMessages.EMAIL_CODE_WAIT, code: AuthErrorCodes.EMAIL_CODE_WAIT, retryAfter: refused.retryAfterSeconds });
     }
-    const noSend = sendRefusal(user ? { role: user.role, roles: user.roles, deactivated: !!user.deactivated_at } : null, isStaffRole);
+    // Blocked (24.11.2026): no role left that a code may carry (candidate / employer) → no code, like a deactivated account.
+    const noSend = sendRefusal(user ? { role: user.role, roles: user.roles, deactivated: !!user.deactivated_at,
+      blocked: !effectiveRoles(usableRolesOf(user), 'email_code').length } : null, isStaffRole);
     const code = generateCode();
     // Staff / deactivated: a code that is never sent (and never remembered), so the following steps look the same.
     await storeCode(key, noSend ? generateCode() + generateCode() : code, !noSend);
@@ -141,7 +143,8 @@ export const requestCode = async (req: Request, res: Response, next: NextFunctio
     res.json({ data: { message: NEUTRAL_REQUEST_ANSWER, resendAfter: EMAIL_CODE.resendSeconds, validMinutes: EMAIL_CODE.ttlMinutes } });
 
     if (noSend) {
-      signinFailed(req, anon(req), noSend === 'staff' ? 'auth.email_code_refused_staff' : 'auth.email_code_refused_deactivated', user, {}, target);
+      signinFailed(req, anon(req), noSend === 'staff' ? 'auth.email_code_refused_staff' : noSend === 'blocked' ? 'auth.email_code_refused_blocked'
+        : 'auth.email_code_refused_deactivated', user, {}, target);
       return;
     }
     rememberForDev(key, code);
@@ -209,8 +212,9 @@ export const verifyCode = async (req: Request, res: Response, next: NextFunction
       let response;
       try {
         response = await sessionAnswer(res, user);
-      } catch {
-        signinFailed(req, anon(req), 'auth.email_code_refused_deactivated', user, { step: 'verify' }, typedEmailRef(email, String(user._id)));
+      } catch (e) {
+        signinFailed(req, anon(req), refusedAction(e) === 'auth.login_refused_blocked' ? 'auth.email_code_refused_blocked' : 'auth.email_code_refused_deactivated',
+          user, { step: 'verify' }, typedEmailRef(email, String(user._id)));
         return invalid();
       }
       auditLogin(req, user, 'email_code');

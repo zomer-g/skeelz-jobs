@@ -4,12 +4,15 @@
 import { useEffect, useState } from 'react';
 import { ROLE_LABELS } from '../../i18n/General.enums';
 import { Chip, Dialog, Help, api, relTime } from '../security/ui';
+import { KIND_LABELS, RoleBlocksButton, RoleBlocksLookup } from './RoleBlocks';
 
 type Staff = {
   id: string; email: string; firstName: string; lastName: string; role: string;
   active: boolean; createdAt: string; invitePending: boolean; lastLogin: string | null;
   /** Several roles per account (23.11.2026): the person is also a candidate / an employer (no data, just the fact). */
   alsoCandidate?: boolean; alsoEmployer?: boolean;
+  /** Roles an admin blocked ('user' | 'employer' | 'staff', 24.11.2026). */
+  blocked?: ('user' | 'employer' | 'staff')[];
 };
 type Data = { roles: string[]; me: string; staff: Staff[] };
 
@@ -112,6 +115,9 @@ export default function StaffManagement() {
                         {s.alsoEmployer && <Chip tone="muted">גם מעסיק</Chip>}
                       </div>
                     )}
+                    {!!s.blocked?.length && (
+                      <div className="d-flex gap-1 mt-1">{s.blocked.map((b) => <Chip key={b} tone="alert">חסום: {KIND_LABELS[b]}</Chip>)}</div>
+                    )}
                   </td>
                   <td data-label="תפקיד">
                     <label className="visually-hidden" htmlFor={`role-${s.id}`}>תפקיד של {s.email}</label>
@@ -134,6 +140,7 @@ export default function StaffManagement() {
                   <td data-label="כניסה אחרונה">{s.lastLogin ? relTime(s.lastLogin) : '—'}</td>
                   <td><div className="sec-actions">
                     <a className="sec-btn" href={`/security-management?person=${encodeURIComponent(s.id)}`} aria-label={`הפעילות של ${s.email}`}>פעילות</a>
+                    <RoleBlocksButton id={s.id} who={s.email} blocked={s.blocked} onChanged={() => void load()} />
                     <button type="button" className="sec-btn" disabled={busy} aria-label={`ניתוק החיבורים של ${s.email}`}
                       onClick={() => act(() => api(`/admin/staff/${s.id}/revoke-sessions`, { method: 'POST' }),
                         `לסגור עכשיו את כל החיבורים של ${s.email}?${isMe ? ' גם את/ה תנותק/י.' : ''}`)}>ניתוק</button>
@@ -152,6 +159,16 @@ export default function StaffManagement() {
             })}
           </tbody>
         </table>
+      </section>
+
+      <section className="sec-card" aria-labelledby="blocks-h">
+        <div className="sec-card__head"><h2 id="blocks-h">חסימת תפקיד בחשבון</h2></div>
+        <Help label="מה זה?">
+          <p>לכל חשבון יכולים להיות עד שלושה תפקידים: מועמד/ת, מעסיק ותפקיד צוות. אפשר לחסום כל אחד מהם לבד — למשל להשאיר
+            מישהו מועמד/ת ולחסום אותו כמעסיק. חסימה סוגרת מיד את כל החיבורים שלו; בכניסה הבאה הוא נכנס רק בתפקידים שנשארו
+            פתוחים. אם לא נשאר תפקיד פתוח, אי אפשר להיכנס. כל חסימה וביטול נרשמים ביומן.</p>
+        </Help>
+        <RoleBlocksLookup />
       </section>
 
       <Dialog open={open} title="הוספת איש צוות" onClose={() => setOpen(false)}>

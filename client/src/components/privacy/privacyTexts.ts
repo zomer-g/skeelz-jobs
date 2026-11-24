@@ -7,11 +7,11 @@
 // the code. No secret names, settings, internal addresses or anything else that maps the attack surface.
 // Pure module (no JSX) so the tests can import it.
 
-export const PRIVACY_UPDATED = '23.11.2026';
+export const PRIVACY_UPDATED = '24.11.2026';
 /** The version id of this text = server/src/security/consent.ts TERMS_VERSION (checked by server/test/privacy.test.ts).
  *  Each version is kept as published (server/privacy-versions/<id>.html): after changing any text here or on the
  *  page, bump both and run `cd client && npm run snapshot:privacy`. */
-export const PRIVACY_VERSION = '2026-11-23-b';
+export const PRIVACY_VERSION = '2026-11-24';
 /** How long a cookie choice is kept before the banner asks again (CONSENT_MAX_AGE_DAYS = 365). */
 export const PRIVACY_CONSENT_MONTHS = 12;
 
@@ -33,7 +33,7 @@ export const DATABASE_DEFINITION: PrivacyDocument = {
     {
       heading: 'סוגי המידע',
       items: [
-        'מועמדים: פרטים אישיים ופרטי קשר, מספר תעודת זהות, כישורים, קורות חיים, הגשות ותשובות לשאלות נוספות שהצוות הוסיף לטופס.',
+        'מועמדים: פרטים אישיים ופרטי קשר, מספר תעודת זהות, כישורים, קורות חיים, הגשות ותשובות לשאלות נוספות שהצוות הוסיף לטופס. חלק מהתשובות עוברות גם למערכת ניהול הקשרים.',
         'מעסיקים: פרטי המשרה ופרטי איש הקשר.',
         'אנשי צוות: שם, מייל ותפקיד.',
         'הסכמות לתנאים ולדיוור, רשימת מי שביקש הסרה מדיוור (כקוד שאי אפשר לשחזר ממנו את הכתובת), ויומן פעילות עם כתובות IP ופרטי דפדפן.',

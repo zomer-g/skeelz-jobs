@@ -119,17 +119,20 @@ const STAFF_FROM = `
 const WINDOW_OPEN = `((j.status = 'Active' AND j.deleted_at IS NULL)
   OR (jis.since IS NOT NULL AND jis.since > now() - make_interval(days => ${EMPLOYER_ACCESS_DAYS})))`;
 
+/** An employer that can't receive: deactivated, or the employer role blocked by an admin (24.11.2026). */
+const E_INACTIVE = `CASE WHEN eu.deactivated_at IS NOT NULL OR 'employer' = ANY(eu.blocked_roles) THEN COALESCE(eu.deactivated_at, now()) END`;
+
 export const listForStaff = async (opts: { state: 'pending' | 'forwarded' | 'all'; page: number; limit: number; jobId?: string }) => {
   const where: string[] = [];
   const params: any[] = [];
-  if (opts.state === 'pending') where.push(`f.id IS NULL AND eu.deactivated_at IS NULL AND ${WINDOW_OPEN}`);
+  if (opts.state === 'pending') where.push(`f.id IS NULL AND (eu.deactivated_at IS NULL AND NOT ('employer' = ANY(eu.blocked_roles))) AND ${WINDOW_OPEN}`);
   if (opts.state === 'forwarded') where.push(`f.id IS NOT NULL`);
   if (opts.jobId) { params.push(opts.jobId); where.push(`x.job_id = $${params.length}`); }
   const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const [rows, total] = await Promise.all([
     query(
       `SELECT x.*, j.job_id AS job_number, j.title, j.status, j.deleted_at, jis.since, eu.id AS employer_id,
-              eu.first_name AS e_first, eu.last_name AS e_last, eu.deactivated_at AS e_deactivated, ep.company_name,
+              eu.first_name AS e_first, eu.last_name AS e_last, ${E_INACTIVE} AS e_deactivated, ep.company_name,
               f.id AS forward_id, f.forwarded_at, f.first_seen_at, ${WINDOW_OPEN} AS window_open
        ${STAFF_FROM} ${w}
        ORDER BY ep.company_name NULLS LAST, eu.id, j.job_id DESC, x.applied_at DESC, x.application_id
@@ -154,7 +157,7 @@ export const listForStaff = async (opts: { state: 'pending' | 'forwarded' | 'all
 
 /** Pending count (applications that could be forwarded now): no names, for the staff badge. */
 export const countPendingForStaff = async (): Promise<number> =>
-  (await queryOne<{ n: number }>(`SELECT COUNT(*)::int AS n ${STAFF_FROM} WHERE f.id IS NULL AND eu.deactivated_at IS NULL AND ${WINDOW_OPEN}`))?.n ?? 0;
+  (await queryOne<{ n: number }>(`SELECT COUNT(*)::int AS n ${STAFF_FROM} WHERE f.id IS NULL AND (eu.deactivated_at IS NULL AND NOT ('employer' = ANY(eu.blocked_roles))) AND ${WINDOW_OPEN}`))?.n ?? 0;
 
 /** For the guest-applications list: which rows belong to an employer's job, and their live forward. */
 export const forwardInfo = async (kind: ForwardKind, applicationIds: string[]) => {
@@ -164,7 +167,7 @@ export const forwardInfo = async (kind: ForwardKind, applicationIds: string[]) =
     ? `SELECT g.id AS application_id, g.job_id FROM guest_applications g WHERE g.id = ANY($1::text[])`
     : `SELECT a.id AS application_id, a.job_id FROM job_applications a WHERE a.id = ANY($1::text[])`;
   const rows = await query(
-    `SELECT x.application_id, ej.user_id AS employer_id, eu.deactivated_at AS e_deactivated, f.id AS forward_id, f.first_seen_at,
+    `SELECT x.application_id, ej.user_id AS employer_id, ${E_INACTIVE} AS e_deactivated, f.id AS forward_id, f.first_seen_at,
             ${WINDOW_OPEN} AS window_open
        FROM (${src}) x
        JOIN employer_jobs ej ON ej.job_id = x.job_id
@@ -197,7 +200,7 @@ export const createForward = async (kind: ForwardKind, applicationId: string, by
       [applicationId]);
   if (!app) return { ok: false, code: 'application_not_found' };
   const job = await queryOne<{ employer_id: string; e_deactivated: Date | null; status: string; deleted_at: Date | null; since: Date | null }>(
-    `SELECT ej.user_id AS employer_id, eu.deactivated_at AS e_deactivated, j.status, j.deleted_at, jis.since
+    `SELECT ej.user_id AS employer_id, ${E_INACTIVE} AS e_deactivated, j.status, j.deleted_at, jis.since
        FROM employer_jobs ej JOIN jobs j ON j.id = ej.job_id AND NOT j.imported_from_live
        JOIN users eu ON eu.id = ej.user_id AND 'employer' = ANY(eu.roles)
        LEFT JOIN job_inactive_since jis ON jis.job_id = j.id
