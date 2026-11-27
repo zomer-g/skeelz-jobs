@@ -27,7 +27,6 @@ import PostJobPage from './components/employer/PostJobPage';
 
 import NoticeBanner from './components/consent/NoticeBanner';
 import ApplyConsentDialog from './components/consent/ApplyConsentDialog';
-import SignInConsentDialog from './components/consent/SignInConsentDialog';
 import ThresholdConfirmDialog from './components/threshold/ThresholdConfirmDialog';
 import { usePageViews } from './utils/analytics';
 import NotFoundPage from './components/common/NotFoundPage';
@@ -172,8 +171,7 @@ const App: React.FC<AppProps> = ({
         </main>
         <Footer />
         {!isServer && <NoticeBanner />}
-        {/* The consent step at sign-in (terms not current); the apply dialog stays as the fallback. */}
-        {!isServer && <SignInConsentDialog />}
+        {/* No consent step on entering the site (owner, 27.11.2026): consent is asked only when signing up or applying. */}
         {!isServer && <ApplyConsentDialog />}
         {!isServer && <ThresholdConfirmDialog />}
         {!isServer && <UpdateNotice />}

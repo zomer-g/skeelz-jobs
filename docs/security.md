@@ -270,12 +270,14 @@ Stored per record: `users` / `job_submissions` (`terms_version`, `terms_accepted
 marketing question, gets 428 `consent_needed` `{ needTerms, needMarketing }` from `POST /api/jobs/apply/:jobId`; the
 client asks once and resends. That check runs only after the job, duplicate, threshold and CV rules passed, and the
 answers are stored only then: a refused application stores no consent, and a missing CV is reported first.
-**At sign-in (owner, 23.11.2026):** a signed-in candidate whose terms are not current — one copied from the existing site
-(never accepted here), or anyone after a bump — gets the same two boxes right away, whatever the way they signed in
-(email code, Google, Microsoft: the client reads `GET /users/me`, `SignInConsentDialog`). `PUT /api/users/me/terms`
-`{ consent: true, marketingConsent? }` stores the terms (+ the marketing answer only if never answered) with a
-`consent_records` row in the same statement (source `first_signin`; logged as `user.terms_accepted`). "Not now" keeps
-them signed in but unable to apply until they accept (the apply dialog asks again). One quick application per address
+**Nothing is asked on entering the site (owner, 27.11.2026).** Visitors see only the small notice at the bottom
+(`NoticeBanner`: what is collected and the measurement, one "הבנתי" button, no choice to make). Consent is asked only in
+an interaction: signing up (the sign-up form) or applying (the candidate step / the apply dialog) — two boxes, the terms
+required and the marketing mail optional and unticked. A signed-in candidate who accepted the current `TERMS_VERSION` is
+never asked again; after a bump (or a candidate copied from the existing site) they are asked when they next apply (428
+above). `PUT /api/users/me/terms` (source `first_signin`, logged as `user.terms_accepted`) stays for that same answer
+outside an application; the client no longer opens a dialog for it at sign-in.
+One quick application per address
 and job: a second one gets the same answer as a new one and nothing is stored or mailed (review 24.11.2026, L6).
 Bump `TERMS_VERSION` when the terms change in a way that needs a new agreement.
 
@@ -462,7 +464,7 @@ candidate or an employer it shows the id and role, never the email.
 | `auth.sso_password_cleared` (SSO linked to an existing candidate account that still had a password from before 11.2026: password cleared, every earlier session closed; the candidate is told on screen) | no | `user:<id>` | role, `sessions_closed`, `provider` (Microsoft) |
 | `user.profile_updated` | no | `user:<id>` (the candidate) | target `self`; `fields` (names only), `removed` for a CV removal |
 | `user.marketing_consent_changed` | no | `user:<id>` (the candidate) | target `self`; `marketing` (new answer), `before` (previous: true / false / null) |
-| `user.terms_accepted` | no | `user:<id>` (the candidate) | target `self`; the consent step at sign-in: `terms_accepted` (true when the current terms were accepted now), `marketing` (the first answer, or null when answered before) |
+| `user.terms_accepted` | no | `user:<id>` (the candidate) | target `self`; `PUT /users/me/terms`: `terms_accepted` (true when the current terms were accepted now), `marketing` (the first answer, or null when answered before) |
 | `auth.oauth_failed` | no | `anonymous:<ip>` / user | provider (`xhostd` / `microsoft`), reason code (`state`, `invalid_token`, `expired`, `missing_token`, `already_linked_other`, `nonce`, `bad_tenant`, `no_email`, `unverified_email`, `staff`, `provider_<error>`, `token_http_<status>`, …) — never tokens or emails |
 | `user.signed_up` (password sign-up, until 11.2026), `job.applied`, `guest.applied` | no | `user:<id>` / `anonymous:<ip>` | `marketing` (the optional box) on sign-up and guest apply; on `job.applied`, `terms_accepted` / `marketing` when the consent dialog was answered |
 | `jobs.submitted`, `jobs.submission_dropped` | no | `anonymous:<ip>` / `user:<id>` (a signed-in employer) | target = submission id / reason (`honeypot`, `queue_full`); `by_account` when sent from an employer account; never the contact details |
