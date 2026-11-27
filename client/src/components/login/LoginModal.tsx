@@ -6,6 +6,7 @@ import useAuthStore from "../../store/Auth.store";
 import useToastStore from "../../store/Toast.store";
 import SignInOptions from "./SignInOptions";
 import EmailCodeSignIn from "./EmailCodeSignIn";
+import { markFreshSignIn } from '../../utils/freshSignIn';
 import Button from "../common/Button";
 
 interface LoginModalProps {
@@ -50,6 +51,8 @@ const LoginModal: React.FC<LoginModalProps> = ({ onSuccess, onEmailSignup, onInc
           disabled={!providers.emailCode}
           onSignup={onEmailSignup}
           onSignedIn={(r) => {
+            // Right after signing in: the consent step if the policy changed (not when signing in to apply: that dialog asks).
+            if (!forApply) markFreshSignIn();
             setUser({ ...r.user, jobApplicationsId: r.jobApplicationsId } as any);
             track('login', { method: 'email_code', ...applyContextParams() });
             // Signing in to apply: the application itself follows, no "signed in" toast on top of it.

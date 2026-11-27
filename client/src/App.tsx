@@ -172,7 +172,8 @@ const App: React.FC<AppProps> = ({
         </main>
         <Footer />
         {!isServer && <NoticeBanner />}
-        {/* The consent step at sign-in (terms not current); the apply dialog stays as the fallback. */}
+        {/* Consent: asked when signing up or applying, and right after signing in when the policy changed (never on
+            merely entering the site, owner 27.11.2026); the apply dialog stays as the fallback. */}
         {!isServer && <SignInConsentDialog />}
         {!isServer && <ApplyConsentDialog />}
         {!isServer && <ThresholdConfirmDialog />}

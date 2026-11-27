@@ -338,10 +338,12 @@ try {
     assert.equal(me.json.data.consent.termsCurrent, false, 'a copy has not accepted the terms here: the sign-in step asks');
     const before = await userRow(ids.dana);
     assert.equal((await dana.req('PUT', '/api/users/me/terms', {})).json?.code, 'terms_required');
-    const r = await dana.req('PUT', '/api/users/me/terms', { consent: true, marketingConsent: true });
+    // They said no in the personal area, so the step shows the marketing box too (owner, 27.11.2026); left unticked.
+    assert.equal(me.json.data.consent.marketingAgreed, false);
+    const r = await dana.req('PUT', '/api/users/me/terms', { consent: true, marketingConsent: false });
     assert.equal(r.status, 200, r.text);
     assert.equal(r.json.data.consent.termsCurrent, true);
-    assert.equal(r.json.data.consent.marketing, false, 'their earlier answer (personal area) stays');
+    assert.equal(r.json.data.consent.marketing, false, 'an unticked box keeps their earlier answer (personal area)');
     assert.equal(r.json.data.readOnly, true);
     const after = await userRow(ids.dana);
     assert.equal(after.legacy_state, 'mirror');

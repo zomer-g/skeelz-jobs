@@ -845,7 +845,7 @@ export enum Terms {
     SignInConfirm = 'Accept and continue',
     SignInLater = 'Not now',
     SignInSaved = 'Saved',
-    SignInDeclined = 'You can choose "Not now" and stay signed in. Without accepting the terms you cannot apply; we will ask again when you apply.',
+    SignInDeclined = 'You can choose "Not now" and stay signed in. Without accepting the terms you cannot apply; we will ask again when you apply or next sign in.',
     SignInFailed = 'Not saved. Please try again.',
 }
 

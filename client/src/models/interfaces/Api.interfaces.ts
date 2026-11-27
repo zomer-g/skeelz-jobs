@@ -106,5 +106,5 @@ export interface MyProfile {
   /** A candidate of the existing site before the cutover: details shown, not editable, no applying. */
   readOnly?: boolean;
   /** server/src/controllers/profileController.ts view(): the two consent boxes. */
-  consent?: { termsCurrent: boolean; marketing: boolean | null; marketingAt: string | null };
+  consent?: { termsCurrent: boolean; marketing: boolean | null; marketingAt: string | null; marketingAgreed?: boolean };
 }

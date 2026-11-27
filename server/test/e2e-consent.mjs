@@ -234,11 +234,31 @@ try {
     assert.equal(await consentRows(), before + 1, 'answered twice');
     assert.equal((await one('SELECT marketing_consent FROM users WHERE id = $1', [candId])).marketing_consent, true, 'the step changed an earlier marketing answer');
   });
-  await check('sign-in consent step: an earlier marketing answer stays (only the terms are taken)', async () => {
+  await check('sign-in consent step (owner, 27.11.2026): marketing asked only of someone who has not agreed; a "yes" counts, an unticked box changes nothing', async () => {
+    const resetTerms = () => db.query('UPDATE users SET terms_version = NULL, terms_accepted_at = NULL WHERE id = $1', [candId]);
+    // Agreed → only the terms box: a marketing answer sent anyway is ignored.
+    assert.equal((await cand.req('GET', '/api/users/me')).json.data.consent.marketingAgreed, true);
+    await resetTerms();
+    let ok = await cand.req('PUT', '/api/users/me/terms', { consent: true, marketingConsent: false });
+    assert.equal(ok.status, 200, ok.text);
+    assert.deepEqual({ t: ok.json.data.consent.termsCurrent, m: ok.json.data.consent.marketing }, { t: true, m: true });
+    // Said no before → both boxes; left unticked → still no, and only the terms are recorded.
     await db.query('UPDATE users SET terms_version = NULL, terms_accepted_at = NULL, marketing_consent = false WHERE id = $1', [candId]);
-    const ok = await cand.req('PUT', '/api/users/me/terms', { consent: true, marketingConsent: true });
+    assert.equal((await cand.req('GET', '/api/users/me')).json.data.consent.marketingAgreed, false);
+    const before = await consentRows();
+    ok = await cand.req('PUT', '/api/users/me/terms', { consent: true, marketingConsent: false });
     assert.equal(ok.status, 200, ok.text);
     assert.deepEqual({ t: ok.json.data.consent.termsCurrent, m: ok.json.data.consent.marketing }, { t: true, m: false });
+    const rec = await one(`SELECT privacy_version, marketing FROM consent_records WHERE subject_kind = 'user' AND subject_id = $1 ORDER BY at DESC, id DESC LIMIT 1`, [candId]);
+    assert.deepEqual({ v: rec.privacy_version, m: rec.marketing, n: await consentRows() }, { v: TERMS_VERSION, m: null, n: before + 1 });
+    // Removed (their own "no" in the personal area) → both boxes; their own signed-in "yes" here clears the removal.
+    assert.equal((await cand.req('PUT', '/api/users/me/marketing-consent', { marketingConsent: false })).status, 200);
+    await resetTerms();
+    assert.equal((await cand.req('GET', '/api/users/me')).json.data.consent.marketingAgreed, false);
+    ok = await cand.req('PUT', '/api/users/me/terms', { consent: true, marketingConsent: true });
+    assert.equal(ok.status, 200, ok.text);
+    assert.deepEqual({ t: ok.json.data.consent.termsCurrent, m: ok.json.data.consent.marketing, a: ok.json.data.consent.marketingAgreed }, { t: true, m: true, a: true });
+    assert.equal((await one('SELECT marketing_optout_at FROM users WHERE id = $1', [candId])).marketing_optout_at, null, 'the removal stayed');
     // Once accepted, applying asks nothing (the apply dialog is only the fallback).
     const r = await cand.req('POST', `/api/jobs/apply/${cvJobId}`, { cv: { mode: 'profile' } });
     assert.equal(r.json?.code, 'jb11', r.text);

@@ -6,6 +6,7 @@ import useToastStore from '../store/Toast.store';
 import { i18n } from '../i18n/I18n';
 import { applyContextParams, parseVia, setSsoMethod, track } from './analytics';
 import { hasApplyIntent, resumeApplyIntent } from './applyIntent';
+import { markFreshSignIn } from './freshSignIn';
 
 
 const ERROR_TEXT = (code: string): string => {
@@ -65,9 +66,12 @@ export const useSignInReturn = (handlers: { onSignup?: () => void; onIncomplete?
     }
     LoginService.getInstance().getSession().then((r) => {
       if (r && typeof r !== 'string' && r.user) {
+        const applying = hasApplyIntent();
+        // Right after signing in (Google / Microsoft): the consent step if the policy changed (utils/freshSignIn.ts);
+        // not when signing in to apply — the apply dialog asks then.
+        if (!applying) markFreshSignIn();
         setUser({ ...r.user, jobApplicationsId: r.jobApplicationsId } as any);
         track('login', { method: via, ...applyContextParams() });
-        const applying = hasApplyIntent();
         // A one-time notice (an old password was removed) stays; "signed in" is not said on top of an application.
         if (passwordCleared) showToast(i18n.getTranslations().SignIn[notice === 'password_cleared_ms' ? 'PasswordClearedMicrosoft' : 'PasswordCleared'], 'info');
         else if (!applying) showToast(i18n.getTranslations().SignIn.SignedIn, 'success');
