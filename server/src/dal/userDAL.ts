@@ -267,12 +267,19 @@ export const signInFacts = async (userId: string): Promise<{ ssoLinked: boolean 
 
 // ---- consent (security/consent.ts) ----
 
-export interface UserConsent { termsVersion: string | null; termsAcceptedAt: Date | null; marketingConsent: boolean | null; marketingConsentAt: Date | null }
+export interface UserConsent {
+  termsVersion: string | null; termsAcceptedAt: Date | null; marketingConsent: boolean | null; marketingConsentAt: Date | null;
+  /** Set while the address is on the removal list (a removal always wins over an earlier "yes"). */
+  marketingOptoutAt: Date | null;
+}
 
 export const getConsent = async (userId: string): Promise<UserConsent | null> => {
-  const r = await queryOne(`SELECT terms_version, terms_accepted_at, marketing_consent, marketing_consent_at FROM users WHERE id = $1`, [userId]);
+  const r = await queryOne(`SELECT terms_version, terms_accepted_at, marketing_consent, marketing_consent_at, marketing_optout_at FROM users WHERE id = $1`, [userId]);
   if (!r) return null;
-  return { termsVersion: r.terms_version ?? null, termsAcceptedAt: r.terms_accepted_at ?? null, marketingConsent: r.marketing_consent ?? null, marketingConsentAt: r.marketing_consent_at ?? null };
+  return {
+    termsVersion: r.terms_version ?? null, termsAcceptedAt: r.terms_accepted_at ?? null, marketingConsent: r.marketing_consent ?? null,
+    marketingConsentAt: r.marketing_consent_at ?? null, marketingOptoutAt: r.marketing_optout_at ?? null,
+  };
 };
 
 /** Stores what was answered: `terms` true = the current version accepted now; `marketing` true/false = answered now.

@@ -843,6 +843,13 @@ export enum Terms {
     PersonalTitle = 'דיוור ועדכונים',
     PersonalHint = 'אפשר לשנות את הבחירה בכל עת. השינוי חל מיד.',
     PersonalSaved = 'ההעדפה נשמרה',
+    SignInTitle = 'לפני שממשיכים',
+    SignInIntro = 'כדי להגיש מועמדות דרך האתר יש לאשר את תנאי השימוש ומדיניות הפרטיות. אפשר לקרוא אותם לפני האישור.',
+    SignInConfirm = 'אישור והמשך',
+    SignInLater = 'לא עכשיו',
+    SignInSaved = 'האישור נשמר',
+    SignInDeclined = 'אפשר לבחור "לא עכשיו" ולהישאר מחוברים. בלי אישור התנאים אי אפשר להגיש מועמדות, ונשאל שוב כשתגישו או בכניסה הבאה.',
+    SignInFailed = 'האישור לא נשמר. כדאי לנסות שוב.',
 }
 
 export enum GuestApplications {

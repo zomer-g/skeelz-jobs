@@ -840,6 +840,13 @@ export enum Terms {
     PersonalTitle = 'Mailing and updates',
     PersonalHint = 'You can change this at any time. The change applies immediately.',
     PersonalSaved = 'Preference saved',
+    SignInTitle = 'Before you continue',
+    SignInIntro = 'To apply through this site, please accept the terms of use and the privacy policy. You can read them first.',
+    SignInConfirm = 'Accept and continue',
+    SignInLater = 'Not now',
+    SignInSaved = 'Saved',
+    SignInDeclined = 'You can choose "Not now" and stay signed in. Without accepting the terms you cannot apply; we will ask again when you apply or next sign in.',
+    SignInFailed = 'Not saved. Please try again.',
 }
 
 export enum GuestApplications {

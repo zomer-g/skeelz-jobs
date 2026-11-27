@@ -16,6 +16,7 @@ import { AxiosError } from 'axios';
 import * as userDAL from '../dal/userDAL.js';
 import { setOwnMarketing } from '../dal/marketingDAL.js';
 import { removeFromList } from '../services/marketingList.js';
+import { mayReceiveMarketing } from '../security/marketing.js';
 import * as userService from '../services/userService.js';
 import { actorOf, writeAudit } from '../security/audit.js';
 import { checkProfile, profileIncomplete } from '../security/pure.js';
@@ -52,7 +53,11 @@ const view = async (user: IUser) => {
     readOnly: user.legacyState === 'mirror',
     profileIncomplete: user.legacyState === 'mirror' ? false : (profileIncomplete(user, await getSignupFields()) || await userMissingRequired(user)),
     // The two boxes (security/consent.ts): the marketing answer can be changed here at any time.
-    consent: { termsCurrent: c?.termsVersion === TERMS_VERSION, marketing: c?.marketingConsent ?? null, marketingAt: c?.marketingConsentAt ?? null },
+    // marketingAgreed: a "yes" and not removed (security/marketing.ts) — the sign-in step asks the marketing box only otherwise.
+    consent: {
+      termsCurrent: c?.termsVersion === TERMS_VERSION, marketing: c?.marketingConsent ?? null, marketingAt: c?.marketingConsentAt ?? null,
+      marketingAgreed: mayReceiveMarketing(c?.marketingConsent, c?.marketingOptoutAt),
+    },
   };
 };
 
@@ -138,22 +143,26 @@ export const setMarketingConsent = async (req: Request, res: Response, next: Nex
   }
 };
 
-// PUT /users/me/terms — { consent: true, marketingConsent?: boolean }: the consent step at sign-in (owner, 23.11.2026).
-// A candidate whose terms are not accepted in their current version (one copied from the existing site never accepted
-// them here) is asked right after signing in, with the same two boxes as everywhere (security/consent.ts). The
-// marketing answer is taken only if they never answered it (their later choice stays in the personal area). Stored
-// with a consent_records row in the same statement (recordConsent, source 'first_signin'). Declining stores nothing:
-// they stay signed in, and applying asks again (428 consent_needed → the apply dialog).
+// PUT /users/me/terms — { consent: true, marketingConsent?: boolean }: the consent step at sign-in (owner, 23.11.2026;
+// 27.11.2026: asked right after signing in — Google, Microsoft or a code by email — never on merely opening the site).
+// A candidate whose terms are not accepted in their current version (the policy changed, or one copied from the
+// existing site never accepted them here) gets the terms box (required) and, only if they have not agreed to marketing
+// (never answered, said no, or removed), the marketing box (optional, unticked). A "yes" is their own signed-in opt-in
+// and clears a removal; an unticked box changes nothing except a first answer (stored as "no"). Stored with a
+// consent_records row in the same statement (recordConsent, source 'first_signin'). Declining stores nothing: they
+// stay signed in, and applying asks again (428 consent_needed → the apply dialog).
 export const acceptTerms = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const user = await ownCandidate(req);
     const state = await userDAL.getConsent(String(user.id));
     const answered = state?.marketingConsent !== null && state?.marketingConsent !== undefined;
-    const check = checkConsent(req.body, { needTerms: true, askMarketing: !answered });
+    const agreed = mayReceiveMarketing(state?.marketingConsent, state?.marketingOptoutAt);
+    const check = checkConsent(req.body, { needTerms: true, askMarketing: !agreed });
     if (!check.ok) return res.status(400).json({ message: 'Consent is required', code: check.error });
     const record: { terms?: true; marketing?: boolean } = {};
     if (state?.termsVersion !== TERMS_VERSION) record.terms = true;
-    if (!answered && typeof check.value.marketing === 'boolean') record.marketing = check.value.marketing;
+    const m = agreed ? undefined : check.value.marketing;
+    if (m === true || (m === false && !answered)) record.marketing = m;
     if (record.terms || record.marketing !== undefined) {
       await userDAL.recordConsent(String(user.id), record, 'first_signin');
       void writeAudit(actorOf(req), 'user.terms_accepted', 'self', { terms_accepted: !!record.terms, marketing: record.marketing ?? null });
